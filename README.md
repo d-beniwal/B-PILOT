@@ -37,14 +37,33 @@ time.
 ## Requirements
 
 A PyQt5 + Bluesky/ophyd environment. The environment this was developed and
-verified against lives one level up, at `../environments/mpe_bluesky_dev.yml`
+verified against ships with this repo at `environments/mpe_bluesky_dev.yml`
 (PyQt5, qtconsole, ipykernel, bluesky, ophyd, databroker, queueserver, etc.,
-python 3.11). Create it with:
+python 3.11) — copied from the parent `mpe_bluesky` workspace's
+`environments/` folder so B-PILOT stands alone as its own checkout. Create it
+with:
 
 ```bash
-conda env create -f ../environments/mpe_bluesky_dev.yml
+conda env create -f environments/mpe_bluesky_dev.yml
 conda activate mpe_bluesky_dev
 ```
+
+### Running against the beamline runtime env instead
+
+If you'd rather run B-PILOT inside the beamline's existing Bluesky env
+(`environment_2024_1.yml` in the parent workspace, the one the queueserver
+and `instrument.collection` actually run under) rather than
+`mpe_bluesky_dev`, it's missing one package the GUI needs:
+
+- **`qtconsole`** (pulls in `QtPy`) — powers the embedded IPython console
+  (`gui_qt/console_panel.py`). `environment_2024_1.yml` only installs
+  `pyqt =5` / `qt =5`, and nothing else in that env depends on `qtconsole`,
+  so it has to be added explicitly, e.g. `pip install qtconsole`.
+
+Everything else B-PILOT imports (`PyQt5`, `tiled`, `databroker`, and the
+Jupyter messaging stack — `jupyter_client`, `pyzmq`, `traitlets` — via
+`ipykernel`) is already covered by `environment_2024_1.yml`, directly or
+transitively.
 
 ## Running it
 

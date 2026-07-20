@@ -1,0 +1,99 @@
+# mpe_bluesky_dev — DEV environment for the MPE PyQt plan-runner GUI
+# =====================================================================
+# Copied from ../../environments/mpe_bluesky_dev.yml (the mpe_bluesky
+# workspace) so B-PILOT is self-contained now that it's its own git repo.
+# Keep this in sync with that file if it changes there.
+#
+# Purpose: a self-contained, *exactly pinned* environment for developing and
+# running the Qt Bluesky plan-runner GUI (gui/gui_qt) on a workstation,
+# plus enough of the Bluesky stack to exercise plans/viewer during dev.
+#
+# This is NOT the beamline runtime env. The beamline uses the Linux
+# `environment_2024_1.yml` (apsu channel: epics-base, pvapy, aps-dm-api, hklpy,
+# pymca, xrayutilities, nexpy, ...), much of which is linux-64 / APS-subnet only
+# and does not solve on macOS. The versions below are pinned to what actually
+# resolves and runs the GUI on this machine (mirrored from the `3idc-bits` env).
+#
+# Intentionally EXCLUDED (not installable off the APS Linux subnet):
+#   - hkl / hklpy   (linux-64 only, apsu channel)  -> imported by instrument.*
+#   - dm / aps-dm-api (APS subnet only)            -> imported by instrument.*
+# instrument.collection therefore won't fully import here; that's expected on a
+# dev box. The GUI (AST-based plan parser, console, viewer, queue) does not
+# import `instrument` in-process, so GUI development is unaffected.
+#
+# create:
+#   conda env create -n mpe_bluesky_dev -f environments/mpe_bluesky_dev.yml
+# activate:
+#   conda activate mpe_bluesky_dev
+# run the GUI (from B-PILOT/):
+#   python launch.py
+
+name: mpe_bluesky_dev
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # --- Python core (conda) --------------------------------------------------
+  - python=3.11.15
+  - pip
+
+  # --- everything else via pip, pinned exactly to the proven resolution -----
+  - pip:
+      # --- Qt GUI stack (PyQt5 + qtconsole) --------------------------------
+      - PyQt5==5.15.11
+      - PyQt5-Qt5==5.15.19
+      - PyQt5-sip==12.18.0
+      - qtconsole==5.7.2
+      - QtPy==2.4.3
+
+      # --- Jupyter kernel / messaging (embedded kernel, client, recorder) --
+      - ipython==9.15.0
+      - ipykernel==7.3.0
+      - jupyter-client==8.9.1
+      - pyzmq==27.1.0
+      - traitlets==5.15.1
+
+      # --- plotting / data viewer ------------------------------------------
+      - matplotlib==3.11.0
+
+      # --- Bluesky framework ------------------------------------------------
+      - bluesky==1.15.1
+      - ophyd==1.11.2
+      - ophyd-registry==2.0.0
+      - apstools==1.7.10
+      - databroker==1.2.5
+      - bluesky-queueserver==0.0.24
+      - bluesky-queueserver-api==0.0.13
+      - bluesky-live==0.0.8
+      - bluesky-widgets==0.0.18
+      - bluesky-tiled-plugins==2.0.8
+      - area-detector-handlers==0.0.10
+      - tiled==0.2.14
+      - event-model==1.24.0
+      - intake==0.6.4
+      - caproto==1.3.0
+
+      # --- EPICS client (no hardware contact during dev) -------------------
+      - pyepics==3.5.10
+
+      # --- scientific / data ------------------------------------------------
+      - numpy==2.3.5
+      - scipy==1.17.1
+      - pandas==2.3.3
+      - xarray==2026.7.0
+      - h5py==3.16.0
+      - hdf5plugin==7.0.0
+      - tifffile==2026.3.3
+      - pint==0.25.3
+      - toolz==1.1.0
+      - pymongo==4.17.0
+      - PyYAML==6.0.3
+      - psutil==7.2.2
+
+      # --- APS / MPE instrument utilities ----------------------------------
+      - pyRestTable==2020.0.10
+      - spec2nexus==2021.2.8
+      - xraydb==4.5.8
+      - GitPython==3.1.45
