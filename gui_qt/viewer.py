@@ -29,10 +29,12 @@ from PyQt5 import QtCore  # noqa: E402
 from PyQt5 import QtWidgets  # noqa: E402
 
 if __package__:
+    from . import config as _config
     from . import paths as _paths
     from . import style as S
 else:  # allow `python gui_qt/viewer.py`
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from gui_qt import config as _config
     from gui_qt import paths as _paths
     from gui_qt import style as S
 
@@ -212,7 +214,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """Build the UI, then connect to the catalog and populate the run list."""
         super().__init__()
         self.setWindowTitle("Bluesky Data Viewer")
-        self.resize(1300, 820)
+        self.resize(S.px(1300), S.px(820))
         self._cat = None
         self._current_run = None
         self._connecting = False
@@ -230,7 +232,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         split.addWidget(self._build_detail_panel())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([360, 940])
+        split.setSizes([S.px(360), S.px(940)])
         clay.addWidget(split, 1)
         self.setCentralWidget(central)
         # Do NOT auto-connect: the window opens immediately; the user clicks
@@ -249,7 +251,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         lay.addWidget(QtWidgets.QLabel("Catalog:"))
         self._catalog = QtWidgets.QLineEdit(defaults["catalog"])
-        self._catalog.setMaximumWidth(140)
+        self._catalog.setMaximumWidth(S.px(140))
         self._catalog.setToolTip(
             "databroker catalog name (defined in ~/.local/share/intake/*.yml)"
         )
@@ -258,13 +260,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         lay.addWidget(QtWidgets.QLabel("Tiled URI (override):"))
         self._uri = QtWidgets.QLineEdit(defaults["uri"])
         self._uri.setPlaceholderText("http://host:8000  (optional, overrides catalog)")
-        self._uri.setMinimumWidth(180)
+        self._uri.setMinimumWidth(S.px(180))
         lay.addWidget(self._uri, 1)
 
         lay.addWidget(QtWidgets.QLabel("NeXus dir:"))
         self._nexus_dir = QtWidgets.QLineEdit(defaults["nexus_dir"])
         self._nexus_dir.setPlaceholderText("(optional) folder holding NeXus files")
-        self._nexus_dir.setMinimumWidth(140)
+        self._nexus_dir.setMinimumWidth(S.px(140))
         lay.addWidget(self._nexus_dir, 1)
 
         self._connect_btn = QtWidgets.QPushButton("Connect")
@@ -275,7 +277,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._conn_status.setStyleSheet(f"color: {S.MUTED};")
         # Cap the width so a long connection message can't force the window wider
         # than the screen (a non-wrapping QLabel's minimum size grows to its text).
-        self._conn_status.setMaximumWidth(360)
+        self._conn_status.setMaximumWidth(S.px(360))
         self._conn_status.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         lay.addWidget(self._conn_status)
         return bar
@@ -296,7 +298,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         refresh = QtWidgets.QPushButton("Refresh")
         refresh.clicked.connect(self._reconnect)
         card.body.addWidget(refresh)
-        card.setMinimumWidth(300)
+        card.setMinimumWidth(S.px(300))
         return card
 
     # ── Right: detail tabs ───────────────────────────────────────────────────────
@@ -551,13 +553,14 @@ def main() -> None:
     """Launch the standalone Bluesky data viewer."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Bluesky Data Viewer")
+    S.set_scale(_config.get("ui_scale"))
     S.apply_theme(app)
     win = ViewerWindow(load_defaults())
     # Never open larger than the screen.
     screen = app.primaryScreen()
     if screen is not None:
         avail = screen.availableGeometry()
-        win.resize(min(1300, avail.width() - 80), min(820, avail.height() - 80))
+        win.resize(min(S.px(1300), avail.width() - 80), min(S.px(820), avail.height() - 80))
     win.show()
     sys.exit(app.exec_())
 

@@ -59,7 +59,7 @@ class RunControlBar(QtWidgets.QWidget):
         row = QtWidgets.QHBoxLayout()
         self._stop_btn = QtWidgets.QPushButton("■  Stop run")
         self._stop_btn.setStyleSheet(_STOP_QSS)
-        self._stop_btn.setMinimumHeight(30)
+        self._stop_btn.setMinimumHeight(S.px(30))
         self._stop_btn.setToolTip(
             "Click = pause at the next checkpoint (Ctrl+C once).\n"
             "Press and hold >1 s = pause immediately (Ctrl+C twice)."

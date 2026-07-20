@@ -58,6 +58,10 @@ DEFAULTS: dict = {
     "dm_experiment": "",
     "setup_file": "exp_setup.yml",
     "script_run_mode": "screen",          # screen | console | lab
+    # Display-only multiplier applied to every font/widget/window size at
+    # startup (see style.SCALE) — for high-DPI screens (e.g. 4K). Takes
+    # effect on the next launch, not live.
+    "ui_scale": 1.0,
 }
 
 _cache: dict | None = None

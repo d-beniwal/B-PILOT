@@ -30,8 +30,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Build the toolbar + split layout and wire the console lifecycle."""
         super().__init__()
         self.setWindowTitle("MPE Bluesky Plan Runner (Qt)")
-        self.resize(1500, 900)
-        self.setMinimumSize(980, 600)
+        self.resize(S.px(1500), S.px(900))
+        self.setMinimumSize(S.px(980), S.px(600))
 
         self.runner = PlanRunnerPanel()
         self.console = ConsolePanel()
@@ -78,8 +78,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         lay.addWidget(QtWidgets.QLabel("Bluesky dir:"))
         self._workdir = QtWidgets.QLineEdit(_DEFAULT_LAUNCH_DIR)
-        self._workdir.setMinimumWidth(160)
-        self._workdir.setMaximumWidth(230)
+        self._workdir.setMinimumWidth(S.px(160))
+        self._workdir.setMaximumWidth(S.px(230))
         self._workdir.setToolTip("Directory the Bluesky session runs in.")
         lay.addWidget(self._workdir)
 
@@ -146,7 +146,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         lay.addWidget(QtWidgets.QLabel("Experiment:"))
         self._dm_exp = QtWidgets.QLineEdit(config.get("dm_experiment"))
-        self._dm_exp.setMinimumWidth(150)
+        self._dm_exp.setMinimumWidth(S.px(150))
         self._dm_exp.setToolTip(
             "DM experiment name. Recorded to user_defaults/dm_experiment.txt by "
             "the launcher (used by both launch modes)."
@@ -155,7 +155,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         lay.addWidget(QtWidgets.QLabel("Setup file:"))
         self._setup_file = QtWidgets.QLineEdit(config.get("setup_file"))
-        self._setup_file.setMaximumWidth(160)
+        self._setup_file.setMaximumWidth(S.px(160))
         self._setup_file.setToolTip("Setup YAML (default exp_setup.yml).")
         lay.addWidget(self._setup_file)
 
@@ -289,12 +289,19 @@ class MainWindow(QtWidgets.QMainWindow):
         """Open the Configuration dialog; apply changes on Save."""
         from .config_dialog import ConfigDialog
 
+        old_scale = config.get("ui_scale")
         dlg = ConfigDialog(self)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             # Re-scan the plan browser with the new files scope; the console
             # reads the launch command live, so nothing else to push.
             self.runner.apply_config()
             self._set_toolbar_status("Configuration saved.")
+            if config.get("ui_scale") != old_scale:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Restart required",
+                    "Restart B-PILOT for the new UI scale to take effect.",
+                )
 
     def _restart_kernel(self) -> None:
         # The kernel runs detached (client-only connection), so "restart" is a

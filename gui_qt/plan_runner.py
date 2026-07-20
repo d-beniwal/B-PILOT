@@ -78,7 +78,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         refresh_btn = QtWidgets.QPushButton("Refresh")
         refresh_btn.clicked.connect(self._refresh_files)
         fb_card.body.addWidget(refresh_btn)
-        fb_card.setMinimumWidth(170)
+        fb_card.setMinimumWidth(S.px(170))
         split.addWidget(fb_card)
 
         # ── Right: plan selector + params + command ─────────────────────────
@@ -90,7 +90,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         sel_row = QtWidgets.QHBoxLayout()
         sel_row.addWidget(S.LabelRight("Plan:"))
         self._plan_cb = S.NoScrollComboBox()
-        self._plan_cb.setMinimumWidth(220)
+        self._plan_cb.setMinimumWidth(S.px(220))
         self._plan_cb.currentIndexChanged.connect(self._on_plan_change)
         sel_row.addWidget(self._plan_cb)
         self._doc_lbl = QtWidgets.QLabel("")
@@ -123,7 +123,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._cmd_display = QtWidgets.QTextEdit()
         self._cmd_display.setObjectName("mono")
         self._cmd_display.setReadOnly(True)
-        self._cmd_display.setMinimumHeight(44)
+        self._cmd_display.setMinimumHeight(S.px(44))
         self._cmd_display.setFont(QtGui.QFont(S.MONO_FAMILIES[0]))
         cmd_card.body.addWidget(self._cmd_display)
         vsplit.addWidget(cmd_card)
@@ -134,7 +134,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._notes.setPlaceholderText(
             "Notes about this run… attached to the Bluesky run on Run, then cleared."
         )
-        self._notes.setMinimumHeight(40)
+        self._notes.setMinimumHeight(S.px(40))
         notes_card.body.addWidget(self._notes)
         vsplit.addWidget(notes_card)
 
@@ -331,7 +331,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             if spec.dtype == "positions":
                 widget = QtWidgets.QPlainTextEdit()
                 widget.setObjectName("mono")
-                widget.setFixedHeight(90)
+                widget.setFixedHeight(S.px(90))
                 widget.setPlaceholderText("100, 0, 50\n150, 0, 50")
                 widget.textChanged.connect(self._live_validate)
             elif spec.dtype == "bool":
@@ -366,7 +366,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                     QtWidgets.QAbstractItemView.ExtendedSelection
                 )
                 widget.addItems(device_source.get_catalog().names_for(spec.category))
-                widget.setFixedHeight(90)
+                widget.setFixedHeight(S.px(90))
                 widget.itemSelectionChanged.connect(self._live_validate)
             else:  # str / int / float / unknown -> line edit
                 widget = QtWidgets.QLineEdit()
@@ -394,7 +394,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._param_grid.addWidget(lbl, 0, 0, 1, 2)
         txt = QtWidgets.QPlainTextEdit()
         txt.setObjectName("mono")
-        txt.setFixedHeight(90)
+        txt.setFixedHeight(S.px(90))
         txt.setPlaceholderText("file_name='test', p_start=-5, p_end=5")
         txt.textChanged.connect(self._live_validate)
         self._param_grid.addWidget(txt, 1, 0, 1, 2)

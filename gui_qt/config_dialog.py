@@ -2,7 +2,8 @@
 
 Reachable from the main window's **Python → Configuration…** menu.  Edits are
 written through :mod:`config` on *Save*; the caller then refreshes the panels so
-changes take effect immediately (no restart).
+changes take effect immediately (no restart) — except **UI scale**, which is
+read once at startup (see :mod:`app`) and needs a relaunch to apply.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ class ConfigDialog(QtWidgets.QDialog):
         """Build the form pre-filled from the current :mod:`config` values."""
         super().__init__(parent)
         self.setWindowTitle("Configuration")
-        self.setMinimumWidth(600)
+        self.setMinimumWidth(S.px(600))
 
         cfg = config.as_dict()
 
@@ -34,6 +35,7 @@ class ConfigDialog(QtWidgets.QDialog):
         outer.addWidget(self._build_visibility_card(cfg))
         outer.addWidget(self._build_launch_card(cfg))
         outer.addWidget(self._build_session_card(cfg))
+        outer.addWidget(self._build_appearance_card(cfg))
         outer.addStretch(1)
         outer.addWidget(self._build_buttons())
 
@@ -110,7 +112,7 @@ class ConfigDialog(QtWidgets.QDialog):
         vis_scroll = QtWidgets.QScrollArea()
         vis_scroll.setWidgetResizable(True)
         vis_scroll.setWidget(self._visibility_container)
-        vis_scroll.setMinimumHeight(160)
+        vis_scroll.setMinimumHeight(S.px(160))
         card.body.addWidget(vis_scroll)
 
         self._rebuild_visibility_list()
@@ -144,7 +146,7 @@ class ConfigDialog(QtWidgets.QDialog):
             rel = os.path.relpath(abs_path, plans_dir).replace(os.sep, "/")
             cb = QtWidgets.QCheckBox(display_name)
             if depth:
-                cb.setStyleSheet(f"margin-left: {16 * depth}px;")
+                cb.setStyleSheet(f"margin-left: {S.px(16 * depth)}px;")
             cb.setChecked(old.get(rel, rel in self._visible_files_initial))
             self._visibility_checks[rel] = cb
             self._visibility_layout.addWidget(cb)
@@ -166,7 +168,7 @@ class ConfigDialog(QtWidgets.QDialog):
         )
         self._startup = QtWidgets.QPlainTextEdit(cfg["bluesky_startup"])
         self._startup.setObjectName("mono")
-        self._startup.setFixedHeight(90)
+        self._startup.setFixedHeight(S.px(90))
         self._startup.setToolTip(
             "MPE console startup is 'from instrument.collection import *' "
             "(account-gated).  Queueserver uses 'from instrument.queueserver "
@@ -244,6 +246,30 @@ class ConfigDialog(QtWidgets.QDialog):
         card.body.addLayout(srow)
         return card
 
+    # ── Appearance (display scale) ───────────────────────────────────────────────
+
+    def _build_appearance_card(self, cfg: dict) -> QtWidgets.QWidget:
+        card = S.make_card("Appearance")
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(S.LabelRight("UI scale:"))
+        self._ui_scale = QtWidgets.QDoubleSpinBox()
+        self._ui_scale.setRange(0.5, 3.0)
+        self._ui_scale.setSingleStep(0.1)
+        self._ui_scale.setDecimals(2)
+        self._ui_scale.setSuffix("×")
+        self._ui_scale.setValue(float(cfg["ui_scale"]))
+        self._ui_scale.setToolTip(
+            "Multiplier applied to every font, widget, and window size — for "
+            "high-DPI screens (e.g. 4K). Takes effect on the next launch."
+        )
+        row.addWidget(self._ui_scale)
+        row.addStretch(1)
+        card.body.addLayout(row)
+        note = QtWidgets.QLabel("Restart B-PILOT for a scale change to take effect.")
+        note.setStyleSheet(f"color: {S.MUTED};")
+        card.body.addWidget(note)
+        return card
+
     # ── Buttons ──────────────────────────────────────────────────────────────────
 
     def _build_buttons(self) -> QtWidgets.QWidget:
@@ -297,6 +323,7 @@ class ConfigDialog(QtWidgets.QDialog):
         self._use_screen.setChecked(bool(d["use_screen"]))
         self._launch_script.setText(d["launch_script"])
         self._embedded_starter.setText(d["embedded_starter_script"])
+        self._ui_scale.setValue(float(d["ui_scale"]))
 
     def values(self) -> dict:
         """Return the edited settings as a config dict."""
@@ -313,6 +340,7 @@ class ConfigDialog(QtWidgets.QDialog):
             "use_screen": self._use_screen.isChecked(),
             "launch_script": self._launch_script.text().strip(),
             "embedded_starter_script": self._embedded_starter.text().strip(),
+            "ui_scale": self._ui_scale.value(),
         }
 
     def accept(self) -> None:  # noqa: D102

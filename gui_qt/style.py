@@ -36,6 +36,23 @@ CMD_RE     = "#2e7d32"  # the "RE(...)" line (green)
 MONO_FAMILIES = ["Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"]
 MONO_CSS = ", ".join(f'"{f}"' if " " in f else f for f in MONO_FAMILIES)
 
+# ── UI scale ────────────────────────────────────────────────────────────────
+# Single multiplier applied to every hard-coded font/widget/window pixel size
+# (see the ``config`` "ui_scale" key). Set once at startup via set_scale()
+# before any widgets are built — not live-updatable mid-session.
+SCALE = 1.0
+
+
+def set_scale(factor: float) -> None:
+    """Set the global UI scale multiplier used by :func:`px`."""
+    global SCALE
+    SCALE = factor if factor and factor > 0 else 1.0
+
+
+def px(n: int | float) -> int:
+    """Scale a pixel literal by the current :data:`SCALE`."""
+    return round(n * SCALE)
+
 
 # ── SVG glyphs for QSS sub-controls ────────────────────────────────────────────
 
@@ -69,19 +86,19 @@ def _make_arrow_svg(direction: str = "down", color: str = "#444444") -> str:
 
 
 def stylesheet(checkmark_svg: str, up_arrow_svg: str = "", down_arrow_svg: str = "") -> str:
-    """Return the full application QSS (light theme)."""
+    """Return the full application QSS (light theme), scaled by :data:`SCALE`."""
     return f"""
-    QWidget {{ color: {TEXT}; font-size: 12px; }}
+    QWidget {{ color: {TEXT}; font-size: {px(12)}px; }}
     QMainWindow, QScrollArea, QSplitter {{ background: {BG}; }}
     QScrollArea {{ border: none; }}
-    QToolTip {{ background: #fffbe6; color: {TEXT}; border: 1px solid {BORDER}; padding: 3px; }}
+    QToolTip {{ background: #fffbe6; color: {TEXT}; border: 1px solid {BORDER}; padding: {px(3)}px; }}
 
     /* ── Context menus ─────────────────────────────────────────── */
     QMenu {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER}; }}
-    QMenu::item {{ padding: 4px 22px; background: transparent; }}
+    QMenu::item {{ padding: {px(4)}px {px(22)}px; background: transparent; }}
     QMenu::item:selected {{ background: {ACCENT}; color: white; }}
     QMenu::item:disabled {{ color: {MUTED}; }}
-    QMenu::separator {{ height: 1px; background: {BORDER}; margin: 3px 6px; }}
+    QMenu::separator {{ height: {px(1)}px; background: {BORDER}; margin: {px(3)}px {px(6)}px; }}
     QMenuBar {{ background: {BG}; color: {TEXT}; }}
     QMenuBar::item:selected {{ background: {ACCENT}; color: white; }}
 
@@ -91,29 +108,29 @@ def stylesheet(checkmark_svg: str, up_arrow_svg: str = "", down_arrow_svg: str =
     /* ── Section cards ─────────────────────────────────────────── */
     QGroupBox {{
         border: 1px solid {BORDER};
-        border-radius: 5px;
-        margin-top: 9px;
-        padding: 6px 4px 4px 4px;
+        border-radius: {px(5)}px;
+        margin-top: {px(9)}px;
+        padding: {px(6)}px {px(4)}px {px(4)}px {px(4)}px;
         background: {PANEL};
     }}
     QGroupBox::title {{
         subcontrol-origin: margin;
         subcontrol-position: top left;
-        left: 10px;
-        padding: 0 4px;
+        left: {px(10)}px;
+        padding: 0 {px(4)}px;
         color: #3a3a3a;
         font-weight: bold;
     }}
-    QGroupBox::indicator {{ width: 14px; height: 14px; }}
+    QGroupBox::indicator {{ width: {px(14)}px; height: {px(14)}px; }}
 
     /* ── Buttons ──────────────────────────────────────────────── */
     QPushButton {{
         color: {TEXT};
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fdfdfd, stop:1 #e6e6e6);
         border: 1px solid {BORDER};
-        border-radius: 4px;
-        padding: 4px 10px;
-        min-height: 18px;
+        border-radius: {px(4)}px;
+        padding: {px(4)}px {px(10)}px;
+        min-height: {px(18)}px;
     }}
     QPushButton:hover {{ border: 1px solid {HOVER}; }}
     QPushButton:pressed {{ background: #dcdcdc; }}
@@ -129,9 +146,9 @@ def stylesheet(checkmark_svg: str, up_arrow_svg: str = "", down_arrow_svg: str =
     /* ── Inputs (white fields) ────────────────────────────────── */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {{
         background: {INPUT_BG}; color: {INPUT_FG};
-        border: 1px solid {BORDER}; border-radius: 3px;
+        border: 1px solid {BORDER}; border-radius: {px(3)}px;
         selection-background-color: {ACCENT}; selection-color: white;
-        min-height: 18px; padding: 1px 3px;
+        min-height: {px(18)}px; padding: {px(1)}px {px(3)}px;
     }}
     QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}
     QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{
@@ -139,13 +156,13 @@ def stylesheet(checkmark_svg: str, up_arrow_svg: str = "", down_arrow_svg: str =
     }}
     /* Invalid fields (datatype / required check) get a red border. */
     QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"], QComboBox[invalid="true"] {{
-        border: 2px solid {ERROR};
+        border: {px(2)}px solid {ERROR};
     }}
     QComboBox::drop-down {{
         subcontrol-origin: padding; subcontrol-position: center right;
-        width: 18px; border-left: 1px solid {BORDER};
+        width: {px(18)}px; border-left: 1px solid {BORDER};
     }}
-    QComboBox::down-arrow {{ image: url({down_arrow_svg}); width: 9px; height: 9px; }}
+    QComboBox::down-arrow {{ image: url({down_arrow_svg}); width: {px(9)}px; height: {px(9)}px; }}
     QComboBox QAbstractItemView {{
         background: {INPUT_BG}; color: {INPUT_FG};
         selection-background-color: {ACCENT}; selection-color: white;
@@ -159,13 +176,13 @@ def stylesheet(checkmark_svg: str, up_arrow_svg: str = "", down_arrow_svg: str =
     }}
 
     /* ── Checkboxes / radios (orange when on) ─────────────────── */
-    QCheckBox, QRadioButton {{ color: {TEXT}; spacing: 6px; background: transparent; }}
+    QCheckBox, QRadioButton {{ color: {TEXT}; spacing: {px(6)}px; background: transparent; }}
     QCheckBox::indicator, QRadioButton::indicator {{
-        width: 14px; height: 14px;
+        width: {px(14)}px; height: {px(14)}px;
         border: 1px solid #9a9a9a; background: #ffffff;
     }}
-    QCheckBox::indicator {{ border-radius: 3px; }}
-    QRadioButton::indicator {{ border-radius: 7px; }}
+    QCheckBox::indicator {{ border-radius: {px(3)}px; }}
+    QRadioButton::indicator {{ border-radius: {px(7)}px; }}
     QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {ACCENT}; }}
     QCheckBox::indicator:checked {{
         background: {ACCENT}; border-color: {ACCENT}; image: url({checkmark_svg});
@@ -185,13 +202,13 @@ def stylesheet(checkmark_svg: str, up_arrow_svg: str = "", down_arrow_svg: str =
     }}
 
     /* ── Scrollbars / splitter / status bar ───────────────────── */
-    QScrollBar:vertical {{ background: #e2e2e2; width: 11px; margin: 0; border: none; }}
-    QScrollBar::handle:vertical {{ background: #bcbcbc; border-radius: 5px; min-height: 24px; }}
+    QScrollBar:vertical {{ background: #e2e2e2; width: {px(11)}px; margin: 0; border: none; }}
+    QScrollBar::handle:vertical {{ background: #bcbcbc; border-radius: {px(5)}px; min-height: {px(24)}px; }}
     QScrollBar::handle:vertical:hover {{ background: #a2a2a2; }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
-    QScrollBar:horizontal {{ background: #e2e2e2; height: 11px; margin: 0; border: none; }}
-    QScrollBar::handle:horizontal {{ background: #bcbcbc; border-radius: 5px; min-width: 24px; }}
+    QScrollBar:horizontal {{ background: #e2e2e2; height: {px(11)}px; margin: 0; border: none; }}
+    QScrollBar::handle:horizontal {{ background: #bcbcbc; border-radius: {px(5)}px; min-width: {px(24)}px; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     QSplitter::handle {{ background: #d3d3d3; }}
     QSplitter::handle:hover {{ background: {BORDER}; }}
@@ -215,7 +232,7 @@ def hline() -> QtWidgets.QFrame:
     f = QtWidgets.QFrame()
     f.setFrameShape(QtWidgets.QFrame.HLine)
     f.setFrameShadow(QtWidgets.QFrame.Plain)
-    f.setFixedHeight(1)
+    f.setFixedHeight(px(1))
     f.setStyleSheet(f"background:{BORDER}; border:none;")
     return f
 
@@ -237,7 +254,7 @@ def primary_btn(text: str) -> QtWidgets.QPushButton:
     """A prominent accent (orange) action button."""
     b = QtWidgets.QPushButton(text)
     b.setObjectName("primary")
-    b.setMinimumHeight(32)
+    b.setMinimumHeight(px(32))
     return b
 
 
@@ -293,7 +310,7 @@ class HoverTip(QtCore.QObject):
         pos = self._w.mapToGlobal(QtCore.QPoint(0, self._w.height() + 4))
         tip = QtWidgets.QLabel(self._text, None, QtCore.Qt.ToolTip)
         tip.setWordWrap(True)
-        tip.setMaximumWidth(440)
+        tip.setMaximumWidth(px(440))
         tip.setStyleSheet(
             f"background: #fffbe6; color: {TEXT}; "
             f"border: 1px solid {BORDER}; padding: 5px;"

@@ -76,13 +76,16 @@ def main() -> None:
 
     # Support both `python -m gui_qt` (package) and `python app.py` (script).
     if __package__:
+        from . import config
         from . import style as S
         from .main_window import MainWindow
     else:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from gui_qt import config
         from gui_qt import style as S
         from gui_qt.main_window import MainWindow
 
+    S.set_scale(config.get("ui_scale"))
     S.apply_theme(app)
 
     win = MainWindow()

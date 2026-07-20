@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.DS_Store
 
 # Per-installation runtime override (regenerated on first Configuration save;
 # should not carry machine-specific state between checkouts).

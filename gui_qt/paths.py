@@ -99,7 +99,7 @@ KERNEL_CWD_DEFAULT = PROJECT_ROOT
 # Kernel connection files, the plan queue, and transcripts.  Home-based so it is
 # writable and per-user on shared beamline workstations; overridable via the
 # ``session_dir`` config key.
-SESSION_DIR_DEFAULT = os.path.expanduser("~/.bluesky_gui")
+SESSION_DIR_DEFAULT = os.path.expanduser("~/.bluesky_pilot")
 
 
 def ensure_on_syspath() -> None:

@@ -89,7 +89,7 @@ class QueuePanel(QtWidgets.QWidget):
 
         row = QtWidgets.QHBoxLayout()
         self._start_btn = S.primary_btn("▶ Start")
-        self._start_btn.setMinimumHeight(26)
+        self._start_btn.setMinimumHeight(S.px(26))
         self._start_btn.clicked.connect(self._start)
         self._pause_btn = QtWidgets.QPushButton("Pause")
         self._pause_btn.clicked.connect(self._pause)
