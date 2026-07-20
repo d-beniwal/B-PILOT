@@ -1,4 +1,5 @@
 # B-PILOT (Bluesky-PILOT)
+## Bluesky (B) - Plan Interface for Launch, Operation & Tracking (PILOT)
 
 A PyQt5 GUI for running [Bluesky](https://blueskyproject.io/) plans at APS
 beamlines: point it at a plan module, get a parameter form generated straight
