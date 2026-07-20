@@ -135,6 +135,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             "Notes about this run… attached to the Bluesky run on Run, then cleared."
         )
         self._notes.setMinimumHeight(S.px(40))
+        self._notes.textChanged.connect(self._live_validate)
         notes_card.body.addWidget(self._notes)
         vsplit.addWidget(notes_card)
 
@@ -582,18 +583,23 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         module = self._plan_origins.get(plan_name, "instrument.collection")
         return f"from {module} import {plan_name}"
 
-    def _make_re_line(self, plan_name: str, values: dict) -> str:
+    def _make_re_line(self, plan_name: str, values: dict, notes: str = "") -> str:
         if "__args__" in values:
-            return f"RE({plan_name}({values['__args__']}))"
-        args = []
-        for spec in self._current_params:
-            if spec.name not in values:
-                continue
-            val = values[spec.name]
-            # RawCode (device refs) emit verbatim; everything else via repr().
-            rendered = str(val) if isinstance(val, RawCode) else repr(val)
-            args.append(f"{spec.name}={rendered}")
-        return f"RE({plan_name}({', '.join(args)}))"
+            inner = f"{plan_name}({values['__args__']})"
+        else:
+            args = []
+            for spec in self._current_params:
+                if spec.name not in values:
+                    continue
+                val = values[spec.name]
+                # RawCode (device refs) emit verbatim; everything else via repr().
+                rendered = str(val) if isinstance(val, RawCode) else repr(val)
+                args.append(f"{spec.name}={rendered}")
+            inner = f"{plan_name}({', '.join(args)})"
+        if notes:
+            # Lands in the run's start document (cat[uid].metadata["start"]["notes"]).
+            return f"RE({inner}, md={{'notes': {notes!r}}})"
+        return f"RE({inner})"
 
     def _compose_lines(self) -> tuple[str, str] | tuple[None, None]:
         """Return (import_line, re_line) if the form is valid, else (None, None)."""
@@ -603,9 +609,10 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         values, errors = self._parse_params()
         if errors:
             return None, None
+        notes = self._notes.toPlainText().strip()
         return (
             self._make_import_line(plan_name),
-            self._make_re_line(plan_name, values),
+            self._make_re_line(plan_name, values, notes),
         )
 
     def _refresh_command(self, has_errors: bool) -> None:

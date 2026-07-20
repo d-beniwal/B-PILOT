@@ -157,6 +157,32 @@ def list_runs(cat, offset: int = 0, limit: int = _PAGE_SIZE) -> tuple[list[tuple
     return out, total
 
 
+def _page_window(current: int, total: int, radius: int = 2) -> list:
+    """Page numbers (1-indexed) to render as buttons, ``None`` marking a gap.
+
+    Always includes the first and last page plus a ``radius``-wide window
+    around ``current``, so long run lists (e.g. 100 pages) render as
+    ``1 … 8 9 [10] 11 12 … 100`` instead of a hundred buttons.
+    """
+    if total <= 0:
+        return []
+    if total == 1:
+        return [1]
+    pages = {1, total, current}
+    for d in range(1, radius + 1):
+        pages.add(current - d)
+        pages.add(current + d)
+    ordered = sorted(p for p in pages if 1 <= p <= total)
+    out: list = []
+    prev = None
+    for p in ordered:
+        if prev is not None and p - prev > 1:
+            out.append(None)
+        out.append(p)
+        prev = p
+    return out
+
+
 def list_catalogs() -> tuple[list[str], str]:
     """Return (names, error) — every catalog registered for this account.
 
@@ -382,11 +408,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         refresh = QtWidgets.QPushButton("Refresh")
         refresh.clicked.connect(self._reconnect)
         btn_row.addWidget(refresh)
-        self._next_page_btn = QtWidgets.QPushButton(f"Load next {_PAGE_SIZE}")
-        self._next_page_btn.setEnabled(False)
-        self._next_page_btn.clicked.connect(self._load_next_page)
-        btn_row.addWidget(self._next_page_btn)
+        btn_row.addStretch(1)
         card.body.addLayout(btn_row)
+
+        self._page_bar = QtWidgets.QHBoxLayout()
+        self._page_bar.setSpacing(2)
+        card.body.addLayout(self._page_bar)
+
         card.setMinimumWidth(S.px(300))
         return card
 
@@ -456,7 +484,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return
         self._connecting = True
         self._connect_btn.setEnabled(False)
-        self._next_page_btn.setEnabled(False)
+        self._clear_page_bar()
         self._runs.clear()
         msg = "Connecting…"
         self._conn_status.setText(msg)
@@ -492,34 +520,88 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._update_page_label()
         self.statusBar().showMessage(f"{self._runs.count()} run(s) loaded.")
 
+    def _current_page(self) -> int:
+        """1-indexed page number for the currently-shown offset."""
+        return self._offset // _PAGE_SIZE + 1
+
+    def _total_pages(self) -> int:
+        if self._total <= 0:
+            return 0
+        return -(-self._total // _PAGE_SIZE)  # ceil division
+
     def _update_page_label(self) -> None:
         if self._total == 0:
             self._page_label.setText("No runs found." if self._cat is not None else "Not connected.")
-            self._next_page_btn.setEnabled(False)
+            self._clear_page_bar()
             return
         first = self._offset + 1
         last = self._offset + self._shown_count
-        self._page_label.setText(f"Showing: {first:,}–{last:,}  |  Available: {self._total:,}")
-        self._next_page_btn.setEnabled(last < self._total)
+        self._page_label.setText(
+            f"Showing: {first:,}–{last:,}  |  Available: {self._total:,}  "
+            f"|  Page {self._current_page()} of {self._total_pages()}"
+        )
+        self._rebuild_page_bar()
 
-    def _load_next_page(self) -> None:
-        """Fetch the next-older page of runs (replaces the current page shown)."""
+    def _clear_page_bar(self) -> None:
+        while self._page_bar.count():
+            item = self._page_bar.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _rebuild_page_bar(self) -> None:
+        """Render Prev / page-number / Next buttons for the current page."""
+        self._clear_page_bar()
+        total_pages = self._total_pages()
+        if total_pages <= 1:
+            return
+        current = self._current_page()
+
+        prev_btn = QtWidgets.QPushButton("‹ Prev")
+        prev_btn.setEnabled(not self._paging and current > 1)
+        prev_btn.clicked.connect(lambda: self._go_to_page(current - 1))
+        self._page_bar.addWidget(prev_btn)
+
+        for entry in _page_window(current, total_pages):
+            if entry is None:
+                dots = QtWidgets.QLabel("…")
+                dots.setStyleSheet(f"color: {S.MUTED};")
+                self._page_bar.addWidget(dots)
+                continue
+            btn = QtWidgets.QPushButton(str(entry))
+            btn.setCheckable(True)
+            btn.setChecked(entry == current)
+            btn.setEnabled(not self._paging and entry != current)
+            btn.setFixedWidth(S.px(36))
+            btn.clicked.connect(lambda _checked, p=entry: self._go_to_page(p))
+            self._page_bar.addWidget(btn)
+
+        next_btn = QtWidgets.QPushButton("Next ›")
+        next_btn.setEnabled(not self._paging and current < total_pages)
+        next_btn.clicked.connect(lambda: self._go_to_page(current + 1))
+        self._page_bar.addWidget(next_btn)
+        self._page_bar.addStretch(1)
+
+    def _go_to_page(self, page: int) -> None:
+        """Fetch the given 1-indexed page of runs."""
         if self._cat is None or self._paging:
             return
-        next_offset = self._offset + _PAGE_SIZE
-        if next_offset >= self._total:
+        total_pages = self._total_pages()
+        page = max(1, min(page, total_pages))
+        offset = (page - 1) * _PAGE_SIZE
+        if offset == self._offset:
             return
         self._paging = True
-        self._next_page_btn.setEnabled(False)
-        self._pending_offset = next_offset
-        self.statusBar().showMessage("Loading next page…")
-        self._pager.start(self._cat, next_offset)
+        self._pending_offset = offset
+        self._rebuild_page_bar()  # disables buttons while the page loads
+        self.statusBar().showMessage(f"Loading page {page}…")
+        self._pager.start(self._cat, offset)
 
     def _on_page_loaded(self, rows, total: int, err: str) -> None:
         self._paging = False
         if err:
             self.statusBar().showMessage(err)
-            self._next_page_btn.setEnabled(True)
+            self._rebuild_page_bar()
             return
         self._offset = self._pending_offset
         self._total = total

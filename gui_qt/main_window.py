@@ -251,18 +251,23 @@ class MainWindow(QtWidgets.QMainWindow):
         return vsplit
 
     def _on_run(self, command: str, notes: str) -> None:
-        """Run the command in the console, attaching the run notes.
+        """Run the command in the console.
 
-        TODO: attach `notes` to the Bluesky run metadata.  Per the run/artifact
-        tracking decision, the intended home is the plan's ``md`` at plan time
-        (so it lands in ``cat[uid].metadata["start"]``) — e.g. inject
-        ``md={'notes': notes}`` into the generated ``RE(plan(...))`` call.  For
-        now the notes are captured here and the command is run as-is.
+        `notes` is already baked into `command` by `plan_runner` as
+        ``md={'notes': ...}`` on the generated ``RE(plan(...))`` call, so it
+        lands in the run's start document (``cat[uid].metadata["start"]``).
+        It is still passed through here for status-line/logging purposes.
         """
         self.console.run_code(command)
 
     def _on_queue(self, command: str, notes: str) -> None:
-        """Append a plan to the queue (the scheduler dispatches it in turn)."""
+        """Append a plan to the queue (the scheduler dispatches it in turn).
+
+        `notes` is stored separately by `queue_store` for the queue panel's
+        tooltip display only — the actual attachment to the run's start
+        document happens via the ``md={'notes': ...}`` already embedded in
+        `command` (see `plan_runner._make_re_line`).
+        """
         self.queue.add(command, notes)
 
     # ── Menu ──────────────────────────────────────────────────────────────────
