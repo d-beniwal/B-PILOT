@@ -130,31 +130,58 @@ def _meta(run) -> tuple[dict, dict]:
     return start, stop
 
 
-def list_runs(cat, offset: int = 0, limit: int = _PAGE_SIZE) -> tuple[list[tuple], int]:
-    """Return ([(uid, start, stop), …], total) for one page, newest first.
+def _all_uids(cat) -> list:
+    """Every run uid in the catalog, in catalog-native order.
 
-    ``offset`` counts back from the newest run (0 = most recent page). Only
-    the ``limit`` uids in that window are fetched — the catalog can hold far
-    more runs than we ever want to pull metadata for at once.
+    This is the expensive part on a large remote MongoDB catalog — callers
+    should fetch it once per connection and reuse it across page turns
+    rather than re-listing the whole catalog on every page (which is what
+    made every page navigation redo this from scratch).
     """
     try:
-        uids = list(cat)
+        return list(cat)
     except Exception:  # noqa: BLE001
-        return [], 0
+        return []
+
+
+def _page_from_uids(cat, uids: list, offset: int, limit: int = _PAGE_SIZE, progress_cb=None) -> list:
+    """Return [(uid, start, stop), …] for one page, newest first.
+
+    ``offset`` counts back from the newest run (0 = most recent page).
+    ``progress_cb(done, total)`` — if given — is invoked periodically while
+    fetching per-run metadata, since that's a per-uid catalog round-trip and
+    can be slow on a remote MongoDB catalog for older pages.
+    """
     total = len(uids)
     end = total - offset
     if end <= 0:
-        return [], total
+        return []
     window = uids[max(0, end - limit):end]
     out: list[tuple] = []
-    for uid in window:
+    for i, uid in enumerate(window):
         try:
             start, stop = _meta(cat[uid])
             out.append((uid, start, stop))
         except Exception:  # noqa: BLE001
             continue
+        if progress_cb is not None and (i % 25 == 0 or i == len(window) - 1):
+            progress_cb(i + 1, len(window))
     out.sort(key=lambda t: t[1].get("time", 0), reverse=True)
-    return out, total
+    return out
+
+
+def list_runs(cat, offset: int = 0, limit: int = _PAGE_SIZE, progress_cb=None) -> tuple[list, int, list]:
+    """Return ([(uid, start, stop), …], total, uids) for one page, newest first.
+
+    Convenience wrapper used for the initial connect, where there is no uid
+    list to reuse yet. ``uids`` is returned so the caller can cache it for
+    subsequent page turns via :func:`_page_from_uids` instead of calling this
+    (and re-listing the whole catalog) again.
+    """
+    uids = _all_uids(cat)
+    total = len(uids)
+    rows = _page_from_uids(cat, uids, offset, limit, progress_cb=progress_cb)
+    return rows, total, uids
 
 
 def _page_window(current: int, total: int, radius: int = 2) -> list:
@@ -237,15 +264,24 @@ class _CatalogWorker(QtCore.QObject):
     for every connect/discover/page-fetch — so the catalog object handed
     back from the connect thread could end up wired to that thread's now-
     dead event loop, and a later page fetch on a *different* new thread
-    would then hang indefinitely with no exception ever raised (matches:
-    first page loads fine, "Loading page 2…" never completes or errors).
-    Routing every catalog-touching call through one long-lived thread keeps
-    that internal state anchored to a single, always-running thread.
+    would then hang indefinitely with no exception ever raised. Routing
+    every catalog-touching call through one long-lived thread keeps that
+    internal state anchored to a single, always-running thread.
+
+    Also caches the full uid listing (:func:`_all_uids`) from the connect
+    call and reuses it for every page turn — re-listing the *entire*
+    catalog (which can be tens of thousands of runs) on every page click
+    was itself a likely source of the "page 2 hangs" symptom, since it's
+    pure added latency on top of the per-run metadata fetch, and gave no
+    feedback while it ran. ``progress`` reports per-run fetch progress
+    within a page so a genuinely slow remote MongoDB catalog is visible as
+    "crawling" rather than indistinguishable from a hang.
     """
 
     connected = QtCore.pyqtSignal(object, object, int, str)  # (catalog, rows, total, message)
     paged = QtCore.pyqtSignal(object, int, str)  # (rows, total, error)
     discovered = QtCore.pyqtSignal(list, str)  # (names, error)
+    progress = QtCore.pyqtSignal(str)  # human-readable progress text
 
     def __init__(self) -> None:
         super().__init__()
@@ -253,7 +289,18 @@ class _CatalogWorker(QtCore.QObject):
         import threading
 
         self._queue = queue.Queue()
+        self._uids_cat = None  # catalog object the cache below belongs to
+        self._uids_cache: list = []
         threading.Thread(target=self._run, daemon=True).start()
+
+    def _uids_for(self, cat) -> list:
+        """Full uid listing for ``cat``, from cache when it's still current."""
+        if cat is self._uids_cat:
+            return self._uids_cache
+        uids = _all_uids(cat)
+        self._uids_cat = cat
+        self._uids_cache = uids
+        return uids
 
     def _run(self) -> None:
         while True:
@@ -262,20 +309,39 @@ class _CatalogWorker(QtCore.QObject):
                 catalog, uri = args
                 try:
                     cat, msg = connect_catalog(catalog, uri)
-                    rows, total = list_runs(cat) if cat is not None else ([], 0)
+                    # Force a fresh listing on every explicit connect/Refresh,
+                    # even if the catalog client happens to hand back the same
+                    # object as before (databroker.catalog can do this).
+                    self._uids_cat = None
+                    if cat is None:
+                        rows, total = [], 0
+                    else:
+                        self.progress.emit("Listing runs…")
+                        uids = self._uids_for(cat)
+                        total = len(uids)
+                        rows = _page_from_uids(
+                            cat, uids, 0, _PAGE_SIZE, progress_cb=self._report_progress
+                        )
                 except Exception as exc:  # noqa: BLE001
                     cat, rows, total, msg = None, [], 0, f"✗ connection failed ({_short(exc)})"
                 self.connected.emit(cat, rows, total, msg)
             elif kind == "page":
                 cat, offset = args
                 try:
-                    rows, total = list_runs(cat, offset=offset)
+                    uids = self._uids_for(cat)
+                    total = len(uids)
+                    rows = _page_from_uids(
+                        cat, uids, offset, _PAGE_SIZE, progress_cb=self._report_progress
+                    )
                     self.paged.emit(rows, total, "")
                 except Exception as exc:  # noqa: BLE001
                     self.paged.emit([], 0, f"✗ failed to load page ({_short(exc)})")
             elif kind == "discover":
                 names, err = list_catalogs()
                 self.discovered.emit(names, err)
+
+    def _report_progress(self, done: int, total: int) -> None:
+        self.progress.emit(f"Fetching run metadata… {done}/{total}")
 
     def connect(self, catalog: str, uri: str) -> None:
         """Queue a connect + first-page listing."""
@@ -313,6 +379,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._worker.connected.connect(self._on_connected)
         self._worker.paged.connect(self._on_page_loaded)
         self._worker.discovered.connect(self._on_catalogs_found)
+        self._worker.progress.connect(self._on_worker_progress)
 
         central = QtWidgets.QWidget()
         clay = QtWidgets.QVBoxLayout(central)
@@ -605,6 +672,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._offset = self._pending_offset
         self._total = total
         self._populate_runs(rows)
+
+    def _on_worker_progress(self, msg: str) -> None:
+        """Live progress from the catalog worker (listing / per-run fetch)."""
+        self.statusBar().showMessage(msg)
 
     def _apply_filter(self, text: str) -> None:
         text = text.lower().strip()
