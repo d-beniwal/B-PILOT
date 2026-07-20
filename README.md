@@ -117,6 +117,50 @@ Open **Python → Configuration…** in the menu bar:
   `from instrument.collection import *`), and whether the kernel is kept
   alive when the GUI closes.
 
+## Connecting to the embedded kernel from a terminal
+
+The embedded console (see Features) is a real Jupyter kernel, not something
+private to the GUI — anything that speaks the Jupyter messaging protocol can
+attach to it from any terminal or `screen` session, independent of the GUI
+(it works even after you close the GUI, since the kernel is detached and
+survives GUI exit).
+
+Each beamline's kernel keeps its connection file at a fixed, predictable path
+(`gui_qt/kernel_session.py`):
+
+```
+<session_dir>/<beamline>/kernel.json      # default session_dir: ~/.bluesky_pilot
+```
+
+e.g. for the default `beamline = "20ide"`: `~/.bluesky_pilot/20ide/kernel.json`
+(`beamline` and `session_dir` are both Configuration values). Point any
+Jupyter client at that file with `--existing <path>`:
+
+```bash
+jupyter qtconsole --existing ~/.bluesky_pilot/20ide/kernel.json
+jupyter console   --existing ~/.bluesky_pilot/20ide/kernel.json
+```
+
+This works from any terminal or `screen` session — it doesn't need to be the
+one that started the kernel, and you don't need `screen -r` for it. The
+connection file carries everything a client needs to connect (ports, IP,
+HMAC key, signature scheme). You may notice its `kernel_name` field is blank
+— that's expected: B-PILOT starts the kernel directly via
+`ipykernel_launcher` (`embedded_kernel_starter.sh`), bypassing the Jupyter
+kernelspec lookup that normally fills that field in, and it has no effect on
+connecting.
+
+Multiple clients — the GUI's own console panel, a standalone `qtconsole`, a
+`jupyter console` — can all attach to the same kernel at once; they share one
+live Bluesky/RunEngine session.
+
+To instead watch the raw process (stdout, tracebacks — not a Jupyter
+client), reattach to the `screen` session hosting it:
+
+```bash
+screen -r bluesky-kernel-20ide
+```
+
 ## Status
 
 Actively developed for MPE (Sectors 1/20). The plan-parsing grammar,
