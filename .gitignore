@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# Per-installation runtime override (regenerated on first Configuration save;
+# should not carry machine-specific state between checkouts).
+gui_config.json
