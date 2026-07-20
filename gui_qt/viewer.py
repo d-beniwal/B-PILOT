@@ -226,67 +226,68 @@ def _short(value, limit: int = 160) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-# ── Background connector ────────────────────────────────────────────────────────
+# ── Background catalog worker ───────────────────────────────────────────────────
 
-class _Connector(QtCore.QObject):
-    """Run the (blocking) catalog connect + first-page listing off the GUI thread.
+class _CatalogWorker(QtCore.QObject):
+    """Single persistent background thread that owns ALL catalog access.
 
-    ``connect_catalog`` / ``list_runs`` can block for a long time when the
-    MongoDB catalog (or a Tiled server) is unreachable.  Doing it on a daemon
-    thread keeps the window responsive and lets the process exit cleanly even
-    mid-attempt; the result is delivered back to the GUI thread via ``done``.
+    Some databroker/intake catalog backends bind an internal async client
+    (e.g. a Motor/asyncio event loop) to whichever thread first touches
+    them. The previous design spun up a *fresh* ad-hoc ``threading.Thread``
+    for every connect/discover/page-fetch — so the catalog object handed
+    back from the connect thread could end up wired to that thread's now-
+    dead event loop, and a later page fetch on a *different* new thread
+    would then hang indefinitely with no exception ever raised (matches:
+    first page loads fine, "Loading page 2…" never completes or errors).
+    Routing every catalog-touching call through one long-lived thread keeps
+    that internal state anchored to a single, always-running thread.
     """
 
-    done = QtCore.pyqtSignal(object, object, int, str)  # (catalog, rows, total, message)
+    connected = QtCore.pyqtSignal(object, object, int, str)  # (catalog, rows, total, message)
+    paged = QtCore.pyqtSignal(object, int, str)  # (rows, total, error)
+    discovered = QtCore.pyqtSignal(list, str)  # (names, error)
 
-    def start(self, catalog: str, uri: str) -> None:
-        """Kick off the connection attempt on a daemon thread."""
+    def __init__(self) -> None:
+        super().__init__()
+        import queue
         import threading
 
-        threading.Thread(
-            target=self._work, args=(catalog, uri), daemon=True
-        ).start()
+        self._queue = queue.Queue()
+        threading.Thread(target=self._run, daemon=True).start()
 
-    def _work(self, catalog: str, uri: str) -> None:
-        try:
-            cat, msg = connect_catalog(catalog, uri)
-            rows, total = list_runs(cat) if cat is not None else ([], 0)
-        except Exception as exc:  # noqa: BLE001
-            cat, rows, total, msg = None, [], 0, f"✗ connection failed ({_short(exc)})"
-        self.done.emit(cat, rows, total, msg)
+    def _run(self) -> None:
+        while True:
+            kind, args = self._queue.get()
+            if kind == "connect":
+                catalog, uri = args
+                try:
+                    cat, msg = connect_catalog(catalog, uri)
+                    rows, total = list_runs(cat) if cat is not None else ([], 0)
+                except Exception as exc:  # noqa: BLE001
+                    cat, rows, total, msg = None, [], 0, f"✗ connection failed ({_short(exc)})"
+                self.connected.emit(cat, rows, total, msg)
+            elif kind == "page":
+                cat, offset = args
+                try:
+                    rows, total = list_runs(cat, offset=offset)
+                    self.paged.emit(rows, total, "")
+                except Exception as exc:  # noqa: BLE001
+                    self.paged.emit([], 0, f"✗ failed to load page ({_short(exc)})")
+            elif kind == "discover":
+                names, err = list_catalogs()
+                self.discovered.emit(names, err)
 
+    def connect(self, catalog: str, uri: str) -> None:
+        """Queue a connect + first-page listing."""
+        self._queue.put(("connect", (catalog, uri)))
 
-class _Pager(QtCore.QObject):
-    """Fetch one additional page of runs from an already-connected catalog."""
+    def fetch_page(self, cat, offset: int) -> None:
+        """Queue a page fetch from an already-connected catalog."""
+        self._queue.put(("page", (cat, offset)))
 
-    done = QtCore.pyqtSignal(object, int, str)  # (rows, total, error)
-
-    def start(self, cat, offset: int) -> None:
-        import threading
-
-        threading.Thread(target=self._work, args=(cat, offset), daemon=True).start()
-
-    def _work(self, cat, offset: int) -> None:
-        try:
-            rows, total = list_runs(cat, offset=offset)
-            self.done.emit(rows, total, "")
-        except Exception as exc:  # noqa: BLE001
-            self.done.emit([], 0, f"✗ failed to load page ({_short(exc)})")
-
-
-class _CatalogFinder(QtCore.QObject):
-    """Enumerate registered databroker catalogs off the GUI thread."""
-
-    done = QtCore.pyqtSignal(list, str)  # (names, error)
-
-    def start(self) -> None:
-        import threading
-
-        threading.Thread(target=self._work, daemon=True).start()
-
-    def _work(self) -> None:
-        names, err = list_catalogs()
-        self.done.emit(names, err)
+    def discover(self) -> None:
+        """Queue enumeration of every registered databroker catalog."""
+        self._queue.put(("discover", None))
 
 
 # ── Main window ─────────────────────────────────────────────────────────────────
@@ -308,12 +309,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._paging = False
         self._pending_offset = 0
         self._discovering = False
-        self._connector = _Connector()
-        self._connector.done.connect(self._on_connected)
-        self._pager = _Pager()
-        self._pager.done.connect(self._on_page_loaded)
-        self._finder = _CatalogFinder()
-        self._finder.done.connect(self._on_catalogs_found)
+        self._worker = _CatalogWorker()
+        self._worker.connected.connect(self._on_connected)
+        self._worker.paged.connect(self._on_page_loaded)
+        self._worker.discovered.connect(self._on_catalogs_found)
 
         central = QtWidgets.QWidget()
         clay = QtWidgets.QVBoxLayout(central)
@@ -459,7 +458,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._discovering = True
         self._discover_btn.setEnabled(False)
         self.statusBar().showMessage("Discovering catalogs…")
-        self._finder.start()
+        self._worker.discover()
 
     def _on_catalogs_found(self, names: list, err: str) -> None:
         self._discovering = False
@@ -490,7 +489,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._conn_status.setText(msg)
         self._conn_status.setToolTip(msg)
         self.statusBar().showMessage(msg)
-        self._connector.start(
+        self._worker.connect(
             self._catalog.currentText().strip(),
             self._uri.text().strip(),
         )
@@ -595,7 +594,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._pending_offset = offset
         self._rebuild_page_bar()  # disables buttons while the page loads
         self.statusBar().showMessage(f"Loading page {page}…")
-        self._pager.start(self._cat, offset)
+        self._worker.fetch_page(self._cat, offset)
 
     def _on_page_loaded(self, rows, total: int, err: str) -> None:
         self._paging = False
