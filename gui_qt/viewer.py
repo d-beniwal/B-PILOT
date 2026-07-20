@@ -40,7 +40,7 @@ else:  # allow `python gui_qt/viewer.py`
 
 # MPE instrument config lives at <project_root>/instrument/iconfig.yml.
 _ICONFIG = _paths.ICONFIG
-_MAX_RUNS = 500  # cap how many runs we enumerate for responsiveness
+_PAGE_SIZE = 500  # runs fetched per page (catalogs can hold tens of thousands)
 
 # Fallback catalog name if it can't be resolved from iconfig by account.
 # 20-ID-E (s20iduser) uses 'hexm'; see instrument/iconfig.yml.
@@ -130,21 +130,46 @@ def _meta(run) -> tuple[dict, dict]:
     return start, stop
 
 
-def list_runs(cat, limit: int = _MAX_RUNS) -> list[tuple]:
-    """Return [(uid, start, stop), …] newest first (best effort)."""
+def list_runs(cat, offset: int = 0, limit: int = _PAGE_SIZE) -> tuple[list[tuple], int]:
+    """Return ([(uid, start, stop), …], total) for one page, newest first.
+
+    ``offset`` counts back from the newest run (0 = most recent page). Only
+    the ``limit`` uids in that window are fetched — the catalog can hold far
+    more runs than we ever want to pull metadata for at once.
+    """
     try:
         uids = list(cat)
     except Exception:  # noqa: BLE001
-        return []
+        return [], 0
+    total = len(uids)
+    end = total - offset
+    if end <= 0:
+        return [], total
+    window = uids[max(0, end - limit):end]
     out: list[tuple] = []
-    for uid in uids[-limit:]:
+    for uid in window:
         try:
             start, stop = _meta(cat[uid])
             out.append((uid, start, stop))
         except Exception:  # noqa: BLE001
             continue
     out.sort(key=lambda t: t[1].get("time", 0), reverse=True)
-    return out
+    return out, total
+
+
+def list_catalogs() -> tuple[list[str], str]:
+    """Return (names, error) — every catalog registered for this account.
+
+    Backed by ``databroker.catalog``, a dict-like registry populated from
+    ``~/.local/share/intake/*.yml``. Best effort: on any failure, returns an
+    empty list and a short error message instead of raising.
+    """
+    try:
+        import databroker
+
+        return sorted(str(name) for name in databroker.catalog), ""
+    except Exception as exc:  # noqa: BLE001
+        return [], _short(exc)
 
 
 # ── Formatting helpers ──────────────────────────────────────────────────────────
@@ -178,7 +203,7 @@ def _short(value, limit: int = 160) -> str:
 # ── Background connector ────────────────────────────────────────────────────────
 
 class _Connector(QtCore.QObject):
-    """Run the (blocking) catalog connect + run-listing off the GUI thread.
+    """Run the (blocking) catalog connect + first-page listing off the GUI thread.
 
     ``connect_catalog`` / ``list_runs`` can block for a long time when the
     MongoDB catalog (or a Tiled server) is unreachable.  Doing it on a daemon
@@ -186,7 +211,7 @@ class _Connector(QtCore.QObject):
     mid-attempt; the result is delivered back to the GUI thread via ``done``.
     """
 
-    done = QtCore.pyqtSignal(object, object, str)  # (catalog, rows, message)
+    done = QtCore.pyqtSignal(object, object, int, str)  # (catalog, rows, total, message)
 
     def start(self, catalog: str, uri: str) -> None:
         """Kick off the connection attempt on a daemon thread."""
@@ -199,10 +224,43 @@ class _Connector(QtCore.QObject):
     def _work(self, catalog: str, uri: str) -> None:
         try:
             cat, msg = connect_catalog(catalog, uri)
-            rows = list_runs(cat) if cat is not None else []
+            rows, total = list_runs(cat) if cat is not None else ([], 0)
         except Exception as exc:  # noqa: BLE001
-            cat, rows, msg = None, [], f"✗ connection failed ({_short(exc)})"
-        self.done.emit(cat, rows, msg)
+            cat, rows, total, msg = None, [], 0, f"✗ connection failed ({_short(exc)})"
+        self.done.emit(cat, rows, total, msg)
+
+
+class _Pager(QtCore.QObject):
+    """Fetch one additional page of runs from an already-connected catalog."""
+
+    done = QtCore.pyqtSignal(object, int, str)  # (rows, total, error)
+
+    def start(self, cat, offset: int) -> None:
+        import threading
+
+        threading.Thread(target=self._work, args=(cat, offset), daemon=True).start()
+
+    def _work(self, cat, offset: int) -> None:
+        try:
+            rows, total = list_runs(cat, offset=offset)
+            self.done.emit(rows, total, "")
+        except Exception as exc:  # noqa: BLE001
+            self.done.emit([], 0, f"✗ failed to load page ({_short(exc)})")
+
+
+class _CatalogFinder(QtCore.QObject):
+    """Enumerate registered databroker catalogs off the GUI thread."""
+
+    done = QtCore.pyqtSignal(list, str)  # (names, error)
+
+    def start(self) -> None:
+        import threading
+
+        threading.Thread(target=self._work, daemon=True).start()
+
+    def _work(self) -> None:
+        names, err = list_catalogs()
+        self.done.emit(names, err)
 
 
 # ── Main window ─────────────────────────────────────────────────────────────────
@@ -218,8 +276,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._cat = None
         self._current_run = None
         self._connecting = False
+        self._offset = 0
+        self._total = 0
+        self._shown_count = 0
+        self._paging = False
+        self._pending_offset = 0
+        self._discovering = False
         self._connector = _Connector()
         self._connector.done.connect(self._on_connected)
+        self._pager = _Pager()
+        self._pager.done.connect(self._on_page_loaded)
+        self._finder = _CatalogFinder()
+        self._finder.done.connect(self._on_catalogs_found)
 
         central = QtWidgets.QWidget()
         clay = QtWidgets.QVBoxLayout(central)
@@ -250,12 +318,23 @@ class ViewerWindow(QtWidgets.QMainWindow):
         lay.setSpacing(6)
 
         lay.addWidget(QtWidgets.QLabel("Catalog:"))
-        self._catalog = QtWidgets.QLineEdit(defaults["catalog"])
-        self._catalog.setMaximumWidth(S.px(140))
+        self._catalog = QtWidgets.QComboBox()
+        self._catalog.setEditable(True)
+        self._catalog.addItem(defaults["catalog"])
+        self._catalog.setCurrentText(defaults["catalog"])
+        self._catalog.setMaximumWidth(S.px(160))
         self._catalog.setToolTip(
-            "databroker catalog name (defined in ~/.local/share/intake/*.yml)"
+            "databroker catalog name (defined in ~/.local/share/intake/*.yml) — "
+            "click Discover to list what's registered for this account"
         )
         lay.addWidget(self._catalog)
+
+        self._discover_btn = QtWidgets.QPushButton("Discover")
+        self._discover_btn.setToolTip(
+            "List all databroker catalogs registered for this account"
+        )
+        self._discover_btn.clicked.connect(self._discover_catalogs)
+        lay.addWidget(self._discover_btn)
 
         lay.addWidget(QtWidgets.QLabel("Tiled URI (override):"))
         self._uri = QtWidgets.QLineEdit(defaults["uri"])
@@ -295,9 +374,19 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._runs.currentItemChanged.connect(self._on_run_selected)
         card.body.addWidget(self._runs, 1)
 
+        self._page_label = QtWidgets.QLabel("Not connected.")
+        self._page_label.setStyleSheet(f"color: {S.MUTED};")
+        card.body.addWidget(self._page_label)
+
+        btn_row = QtWidgets.QHBoxLayout()
         refresh = QtWidgets.QPushButton("Refresh")
         refresh.clicked.connect(self._reconnect)
-        card.body.addWidget(refresh)
+        btn_row.addWidget(refresh)
+        self._next_page_btn = QtWidgets.QPushButton(f"Load next {_PAGE_SIZE}")
+        self._next_page_btn.setEnabled(False)
+        self._next_page_btn.clicked.connect(self._load_next_page)
+        btn_row.addWidget(self._next_page_btn)
+        card.body.addLayout(btn_row)
         card.setMinimumWidth(S.px(300))
         return card
 
@@ -333,6 +422,32 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         return self._tabs
 
+    # ── Catalog discovery ────────────────────────────────────────────────────────
+
+    def _discover_catalogs(self) -> None:
+        """List every databroker catalog registered for this account."""
+        if self._discovering:
+            return
+        self._discovering = True
+        self._discover_btn.setEnabled(False)
+        self.statusBar().showMessage("Discovering catalogs…")
+        self._finder.start()
+
+    def _on_catalogs_found(self, names: list, err: str) -> None:
+        self._discovering = False
+        self._discover_btn.setEnabled(True)
+        if err:
+            self.statusBar().showMessage(f"✗ catalog discovery failed ({err})")
+            return
+        current = self._catalog.currentText().strip()
+        self._catalog.clear()
+        self._catalog.addItems(names)
+        self._catalog.setCurrentText(current)
+        if names:
+            self.statusBar().showMessage(f"Found {len(names)} catalog(s): {', '.join(names)}")
+        else:
+            self.statusBar().showMessage("No catalogs found for this account.")
+
     # ── Connect / list ───────────────────────────────────────────────────────────
 
     def _reconnect(self) -> None:
@@ -341,21 +456,24 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return
         self._connecting = True
         self._connect_btn.setEnabled(False)
+        self._next_page_btn.setEnabled(False)
         self._runs.clear()
         msg = "Connecting…"
         self._conn_status.setText(msg)
         self._conn_status.setToolTip(msg)
         self.statusBar().showMessage(msg)
         self._connector.start(
-            self._catalog.text().strip(),
+            self._catalog.currentText().strip(),
             self._uri.text().strip(),
         )
 
-    def _on_connected(self, cat, rows, msg: str) -> None:
+    def _on_connected(self, cat, rows, total: int, msg: str) -> None:
         """Result from the background connector (delivered on the GUI thread)."""
         self._connecting = False
         self._connect_btn.setEnabled(True)
         self._cat = cat
+        self._offset = 0
+        self._total = total
         self._conn_status.setText(msg)
         self._conn_status.setToolTip(msg)   # full text on hover (label is width-capped)
         self.statusBar().showMessage(msg)
@@ -370,7 +488,42 @@ class ViewerWindow(QtWidgets.QMainWindow):
             item = QtWidgets.QListWidgetItem(f"#{sid}   {plan}\n   {when}   {uid[:8]}")
             item.setData(QtCore.Qt.UserRole, (uid, start, stop))
             self._runs.addItem(item)
-        self.statusBar().showMessage(f"{self._runs.count()} run(s).")
+        self._shown_count = len(rows)
+        self._update_page_label()
+        self.statusBar().showMessage(f"{self._runs.count()} run(s) loaded.")
+
+    def _update_page_label(self) -> None:
+        if self._total == 0:
+            self._page_label.setText("No runs found." if self._cat is not None else "Not connected.")
+            self._next_page_btn.setEnabled(False)
+            return
+        first = self._offset + 1
+        last = self._offset + self._shown_count
+        self._page_label.setText(f"Showing: {first:,}–{last:,}  |  Available: {self._total:,}")
+        self._next_page_btn.setEnabled(last < self._total)
+
+    def _load_next_page(self) -> None:
+        """Fetch the next-older page of runs (replaces the current page shown)."""
+        if self._cat is None or self._paging:
+            return
+        next_offset = self._offset + _PAGE_SIZE
+        if next_offset >= self._total:
+            return
+        self._paging = True
+        self._next_page_btn.setEnabled(False)
+        self._pending_offset = next_offset
+        self.statusBar().showMessage("Loading next page…")
+        self._pager.start(self._cat, next_offset)
+
+    def _on_page_loaded(self, rows, total: int, err: str) -> None:
+        self._paging = False
+        if err:
+            self.statusBar().showMessage(err)
+            self._next_page_btn.setEnabled(True)
+            return
+        self._offset = self._pending_offset
+        self._total = total
+        self._populate_runs(rows)
 
     def _apply_filter(self, text: str) -> None:
         text = text.lower().strip()
