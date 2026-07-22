@@ -150,5 +150,14 @@
   },
   "databroker_catalog": "1id_hexm1",
   "databroker_uri": "",
-  "databroker_nexus_dir": ""
+  "databroker_nexus_dir": "",
+  "acquisition_modes": {
+    "Step & shoot (area detector)": {"plan_opener": "generic_opener", "per_step": "step_and_shoot_", "plan_closer": "generic_closer"},
+    "Step & shoot (scalers only)": {"plan_opener": "scaler_opener", "per_step": "scaler_step_and_shoot_", "plan_closer": "scaler_closer"},
+    "Tomography step & shoot": {"plan_opener": "generic_opener", "per_step": "tomo_step_and_shoot_", "plan_closer": "generic_closer"},
+    "Tomography sweep": {"plan_opener": "generic_opener", "per_step": "tomo_sweep_", "plan_closer": "generic_closer"},
+    "Scaler sweep": {"plan_opener": "scaler_opener", "per_step": "scaler_sweep_", "plan_closer": "scaler_closer"},
+    "Step ladder (2x frames)": {"plan_opener": "generic_opener", "per_step": "step_ladder_", "plan_closer": "generic_closer"},
+    "Sweep ladder (2x frames)": {"plan_opener": "generic_opener", "per_step": "sweep_ladder_", "plan_closer": "generic_closer"}
+  }
 }

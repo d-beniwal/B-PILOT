@@ -29,6 +29,7 @@ from . import style as S
 from .plan_parser import _NODEFAULT
 from .plan_parser import ParamSpec
 from .plan_parser import RawCode
+from .skeleton_widgets import MotorRowsWidget
 
 
 class PlanRunnerPanel(QtWidgets.QWidget):
@@ -49,6 +50,13 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._param_widgets: dict[str, tuple] = {}
         self._current_params: list[ParamSpec] = []
         self._console_ready = False
+        # scan_skeletons.py's six *args-based plans (see plan_parser.SKELETON_SHAPES):
+        # a composite motor-rows + acquisition-mode form replaces the ordinary
+        # per-ParamSpec grid for `*args`/plan_opener/per_step/plan_closer. Reset
+        # alongside every other param-grid rebuild in `_clear_param_grid`.
+        self._skeleton: tuple[str, bool] | None = None
+        self._motor_rows_widget: MotorRowsWidget | None = None
+        self._acq_mode_combo: QtWidgets.QComboBox | None = None
 
         self._build_ui()
         self._populate_file_browser()
@@ -280,7 +288,15 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         spec = self._plan_specs.get(plan_name)
         module = self._plan_origins.get(plan_name, "")
         fallback = f"from {module}" if module else ""
-        if spec and spec["documented"]:
+        skeleton = spec.get("skeleton") if spec else None
+        if skeleton:
+            # scan_skeletons.py plan (see plan_parser.SKELETON_SHAPES) — routes here
+            # even once `documented` is True, since the composite form replaces the
+            # ordinary grid for *args/plan_opener/per_step/plan_closer regardless.
+            self._doc_lbl.setText(spec["summary"] or fallback)
+            self._current_params = spec["params"]
+            self._rebuild_skeleton_form(skeleton, spec["params"])
+        elif spec and spec["documented"]:
             self._doc_lbl.setText(spec["summary"] or fallback)
             self._current_params = spec["params"]
             self._rebuild_param_form(spec["params"])
@@ -298,6 +314,12 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             if w is not None:
                 w.deleteLater()
         self._param_widgets.clear()
+        # Composite skeleton widgets live in this same grid (cleared above) — drop
+        # the Python-side references too so a stale MotorRowsWidget/combo can't be
+        # read after switching to a different plan.
+        self._skeleton = None
+        self._motor_rows_widget = None
+        self._acq_mode_combo = None
 
     @staticmethod
     def _label_text(spec: ParamSpec) -> str:
@@ -320,9 +342,16 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             lines += ["", detail]
         return "\n".join(lines)
 
-    def _rebuild_param_form(self, params: list[ParamSpec]) -> None:
-        self._clear_param_grid()
-        for row, spec in enumerate(params):
+    def _rebuild_param_form(self, params: list[ParamSpec], row_offset: int = 0) -> None:
+        """Build the ordinary per-`ParamSpec` grid, starting at grid row `row_offset`.
+
+        `row_offset` lets `_rebuild_skeleton_form` place the composite motor-rows
+        + acquisition-mode widgets in the rows above this one without a second
+        grid; every other call site keeps the default (row 0) unchanged.
+        """
+        if row_offset == 0:
+            self._clear_param_grid()
+        for row, spec in enumerate(params, start=row_offset):
             tip = self._tooltip(spec)
             lbl = S.LabelRight(self._label_text(spec))
             lbl.setWordWrap(True)
@@ -387,7 +416,49 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             self._param_grid.addWidget(widget, row, 1)
             self._param_widgets[spec.name] = (spec, widget)
 
-        self._param_grid.setRowStretch(len(params), 1)
+        self._param_grid.setRowStretch(len(params) + row_offset, 1)
+
+    def _rebuild_skeleton_form(self, skeleton: tuple[str, bool], params: list[ParamSpec]) -> None:
+        """Composite form for a scan_skeletons.py plan: motor rows + acquisition
+        mode (rows 0-1), then the ordinary docstring-driven kwargs below (row 2+).
+
+        See plan_parser.SKELETON_SHAPES for `skeleton` = (shape, relative), and
+        skeleton_widgets.MotorRowsWidget for the motor-rows widget itself.
+        """
+        self._clear_param_grid()
+        shape, relative = skeleton
+        self._skeleton = skeleton
+
+        self._motor_rows_widget = MotorRowsWidget(shape, relative)
+        self._motor_rows_widget.changed.connect(self._live_validate)
+        motors_lbl = S.LabelRight("Motors:  ★")
+        motors_lbl.setWordWrap(True)
+        S.HoverTip(
+            motors_lbl,
+            "The plan's *args — one or more motors, each with its own "
+            "position(s)/range. Not documentable via the ordinary Parameters "
+            "grammar (a bare *args can't be bound to a single field), so it gets "
+            "this dedicated widget instead.",
+        )
+        self._param_grid.addWidget(motors_lbl, 0, 0)
+        self._param_grid.addWidget(self._motor_rows_widget, 0, 1)
+
+        self._acq_mode_combo = S.NoScrollComboBox()
+        modes = config.get("acquisition_modes") or {}
+        self._acq_mode_combo.addItems(sorted(modes.keys()))
+        self._acq_mode_combo.currentTextChanged.connect(self._live_validate)
+        mode_lbl = S.LabelRight("Acquisition mode:  ★")
+        S.HoverTip(
+            mode_lbl,
+            "Resolves to this plan's plan_opener/per_step/plan_closer trio — "
+            "curated per beamline in the active profile's acquisition_modes "
+            "setting, since these are function references with no dtype of "
+            "their own in the Parameters grammar.",
+        )
+        self._param_grid.addWidget(mode_lbl, 1, 0)
+        self._param_grid.addWidget(self._acq_mode_combo, 1, 1)
+
+        self._rebuild_param_form(params, row_offset=2)
 
     def _rebuild_generic_form(self) -> None:
         self._clear_param_grid()
@@ -455,10 +526,26 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 return f"{short}: not a valid integer"
         return None
 
+    def _skeleton_errors(self) -> list[str]:
+        """Errors for the composite motor-rows + acquisition-mode widgets.
+
+        Empty list when no skeleton is active, or when both are valid. Shared by
+        `_live_validate` (form-field flagging) and `_parse_params` (value
+        extraction) so the two can't drift out of sync.
+        """
+        if not self._skeleton:
+            return []
+        errs = [f"Motors: {e}" for e in self._motor_rows_widget.errors()]
+        modes = config.get("acquisition_modes") or {}
+        if not modes.get(self._acq_mode_combo.currentText().strip()):
+            errs.append("Acquisition mode: required")
+        return errs
+
     def _live_validate(self) -> None:
         """Re-check every field, flag invalid ones, and gate the Run button."""
         errors: list[str] = []
         if "__args__" not in self._param_widgets:
+            errors.extend(self._skeleton_errors())
             for spec in self._current_params:
                 widget = self._param_widgets[spec.name][1]
                 err = self._field_error(spec, widget)
@@ -494,6 +581,20 @@ class PlanRunnerPanel(QtWidgets.QWidget):
 
         values: dict = {}
         errors: list[str] = []
+
+        if self._skeleton:
+            skeleton_errors = self._skeleton_errors()
+            errors.extend(skeleton_errors)
+            if not skeleton_errors:
+                # Already-rendered source fragments (bare motor names, numeric
+                # literals, "[..]" list literals) — spliced verbatim as leading
+                # positional args in _make_re_line, no repr()/RawCode needed here.
+                values["__positional__"] = self._motor_rows_widget.tokens()
+                modes = config.get("acquisition_modes") or {}
+                mode = modes.get(self._acq_mode_combo.currentText().strip(), {})
+                values["plan_opener"] = RawCode(mode["plan_opener"])
+                values["per_step"] = RawCode(mode["per_step"])
+                values["plan_closer"] = RawCode(mode["plan_closer"])
 
         for spec in self._current_params:
             widget = self._param_widgets[spec.name][1]
@@ -587,7 +688,12 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         if "__args__" in values:
             inner = f"{plan_name}({values['__args__']})"
         else:
-            args = []
+            values = dict(values)
+            # Leading positional args (scan_skeletons.py's *args, from
+            # MotorRowsWidget.tokens()) must come first — Python syntax requires
+            # positional args before keyword args.
+            args = list(values.pop("__positional__", []))
+            rendered_names = set()
             for spec in self._current_params:
                 if spec.name not in values:
                     continue
@@ -595,6 +701,14 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 # RawCode (device refs) emit verbatim; everything else via repr().
                 rendered = str(val) if isinstance(val, RawCode) else repr(val)
                 args.append(f"{spec.name}={rendered}")
+                rendered_names.add(spec.name)
+            # plan_opener/per_step/plan_closer (from the Acquisition mode combo) are
+            # never backed by a ParamSpec by design — they must stay undocumented so
+            # the ordinary form doesn't also show them — so the loop above never
+            # reaches them. Emit them here instead; always RawCode (function refs).
+            for name in ("plan_opener", "per_step", "plan_closer"):
+                if name in values and name not in rendered_names:
+                    args.append(f"{name}={values[name]}")
             inner = f"{plan_name}({', '.join(args)})"
         if notes:
             # Lands in the run's start document (cat[uid].metadata["start"]["notes"]).

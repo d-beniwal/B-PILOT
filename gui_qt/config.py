@@ -112,6 +112,14 @@ DEFAULTS: dict = {
     # account via the pre-registered intake catalog files.
     "databroker_uri": "",
     "databroker_nexus_dir": "",  # optional folder holding raw NeXus files
+    # Skeleton-scan acquisition modes (see gui_qt/skeleton_widgets.py and
+    # plan_parser.SKELETON_SHAPES): {label: {"plan_opener": "<name>",
+    # "per_step": "<name>", "plan_closer": "<name>"}}. Hand-curated per beamline
+    # from verified instrument/plans/scan_sw_triggering.py names -- never
+    # auto-scraped from user plan files, several of which reference broken/
+    # undefined per_step names. Meant to be committed (like device_selection),
+    # not workstation-specific.
+    "acquisition_modes": {},
 }
 
 # Keys that stay diff-only (omitted from a saved profile unless overridden),

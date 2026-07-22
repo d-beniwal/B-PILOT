@@ -74,6 +74,30 @@ _KNOWN_DTYPES = {
     "str", "int", "float", "bool", "choice", "positions", "device", "device_list",
 }
 
+# ``instrument/plans/scan_skeletons.py``'s six generic scan plans all take their
+# motor(s)/position(s) through a bare ``*args`` -- something `_signature()` (below)
+# can never turn into a `ParamSpec`, no matter what the docstring says.  Rather than
+# build a general vararg-inference mechanism for a shape that appears nowhere else in
+# the codebase, this is an explicit, hand-maintained allowlist: plan name -> (shape,
+# relative).  `shape`'s *args token-count-per-row (2/2/3/4) matches
+# `scan_skeletons.check_num_args(args, N)` exactly, and drives which fields
+# `gui_qt/skeleton_widgets.MotorRowsWidget` renders per motor row:
+#   "list"      -> motor, [p1, p2, ...]           (one explicit position list)
+#   "list_grid" -> motor, [p1, p2, ...]            (grid/outer-product version)
+#   "step"      -> motor, start, stop              (shared `nsteps` kwarg elsewhere)
+#   "step_grid" -> motor, start, stop, nsteps       (nsteps inline per motor)
+# `relative` only changes field labels in the widget (start/stop -> deltas) -- the
+# token shape is identical, since `mpe_rel_scan`/`mpe_rel_grid_scan` are thin wrappers
+# around `mpe_step_scan`/`mpe_step_grid_scan` with the same `*args` shape.
+SKELETON_SHAPES: dict[str, tuple[str, bool]] = {
+    "mpe_list_scan":      ("list", False),
+    "mpe_list_grid_scan": ("list_grid", False),
+    "mpe_step_scan":      ("step", False),
+    "mpe_step_grid_scan": ("step_grid", False),
+    "mpe_rel_scan":       ("step", True),
+    "mpe_rel_grid_scan":  ("step_grid", True),
+}
+
 
 class RawCode(str):
     """A string that must be emitted **verbatim (unquoted)** in generated code.
@@ -319,6 +343,14 @@ def find_plan_specs(filepath: str) -> dict[str, dict]:
             "summary": _first_paragraph(doc),
             "params": params,
             "documented": bool(doc_meta),
+            # (shape, relative) for one of scan_skeletons.py's six plans, else None.
+            "skeleton": SKELETON_SHAPES.get(node.name),
+            # Cheap staleness guard: True with skeleton=None flags a plan that takes
+            # bare *args but isn't in SKELETON_SHAPES (e.g. a future 7th skeleton) --
+            # nothing acts on this yet, but it's a greppable signal instead of a
+            # silent "just falls back to the generic form, indistinguishable from any
+            # other undocumented plan."
+            "has_varargs": node.args.vararg is not None,
         }
     return specs
 
