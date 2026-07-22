@@ -165,11 +165,19 @@ screen -r bluesky-kernel-20ide
 
 Actively developed for MPE (Sectors 1/20). The plan-parsing grammar,
 device-picker, queue, and console machinery are beamline-agnostic by
-construction. Two beamline-specific pieces are already just Configuration
-values, not code: the plans directory/visibility and the launch/startup
-commands. One is still a data file that ships alongside the GUI rather than a
-Configuration setting — `device_manifest.yml` (which categories of device
-names populate the `device{...}`/`device_list{...}` pickers) — so a new
-beamline currently supplies its own manifest by editing/replacing that file.
-The intent is for other beamlines to point B-PILOT at their own
-`instrument/` package, drop in their manifest, and Configure the rest.
+construction, and every beamline-specific setting — plans directory/
+visibility, launch/session commands, device search paths, appearance — lives
+in a **profile** — a folder (`profiles/<name>/`, e.g. `profiles/20ide/`)
+holding a shared `default_config.json` (git-committed baseline) and a live
+`active_config.json` (per-workstation, gitignored, bootstrapped from the
+default on first use) — editable from the Configuration dialog's profile
+bar (create/load/save-as/save-as-default/delete; Restore Defaults previews
+the profile's `default_config.json`). Device names for the
+`device{...}`/`device_list{...}` pickers are no
+longer a hand-maintained manifest: the Devices tab's **Discover** button
+statically scans a profile's configured search path(s) for `__all__`-exported
+names (never imports, never touches EPICS) and infers a category from the
+source filename (see `gui_qt/device_discovery.py`). A new beamline is
+onboarded by creating a profile, pointing its device search paths at that
+beamline's `instrument/devices/<bl>_devices/` directory, and clicking
+Discover.

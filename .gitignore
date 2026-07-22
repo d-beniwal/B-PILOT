@@ -5,3 +5,8 @@ __pycache__/
 # Per-installation runtime override (regenerated on first Configuration save;
 # should not carry machine-specific state between checkouts).
 gui_config.json
+
+# Per-workstation live settings, bootstrapped from each profile's committed
+# default_config.json on first use — should not carry machine-specific state
+# between checkouts.
+profiles/*/active_config.json

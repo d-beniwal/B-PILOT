@@ -1,0 +1,76 @@
+{
+  "default_plan_file": "scans_stationary_gui_testing.py",
+  "visible_plan_files": [
+    "scans_stationary_gui_testing.py"
+  ],
+  "bluesky_startup": "from instrument.collection import *",
+  "keep_kernel_on_exit": true,
+  "last_kernel_connection_file": "/Users/dbeniwal/.bluesky_pilot/20ide/kernel.json",
+  "beamline": "20ide",
+  "use_screen": true,
+  "launch_mode": "embedded",
+  "dm_experiment": "",
+  "setup_file": "exp_setup.yml",
+  "script_run_mode": "screen",
+  "ui_scale": 1.0,
+  "device_search_paths": [
+    "instrument/devices/s20ide_devices"
+  ],
+  "device_selection": {
+    "area_detector": {
+      "gh2": false,
+      "pg6": true,
+      "pimega": true,
+      "s20varex2": true
+    },
+    "motor": {
+      "attenE": true,
+      "d2E": true,
+      "d3E": true,
+      "d4_1E": true,
+      "d4_2E": true,
+      "hlsms": true,
+      "hlsmstbl": true,
+      "ic1E": true,
+      "ic2E": true,
+      "lens1E": true,
+      "lens2E": true,
+      "lens3E": true,
+      "lens4E": true,
+      "nfE": true,
+      "samE": true,
+      "saxsE": true,
+      "sic1E": true,
+      "sic2E": true,
+      "tomoE": true,
+      "txm_cam": true,
+      "txm_lensE": true,
+      "txmE": true,
+      "zondaD2": true,
+      "zondaNF": true,
+      "zondaSMS": true
+    },
+    "scaler": {
+      "doorsE": true,
+      "hvacE": true,
+      "jewellE": true,
+      "labjackE": true,
+      "tamm1E": true,
+      "tamm2E": true,
+      "tamm3E": true,
+      "tc32E": true
+    },
+    "shutter": {
+      "fsE": true
+    },
+    "slit": {
+      "slitEds": true,
+      "slitEus": true,
+      "txm_slit1": true,
+      "txm_slit2": true
+    }
+  },
+  "databroker_catalog": "hexm",
+  "databroker_uri": "",
+  "databroker_nexus_dir": ""
+}

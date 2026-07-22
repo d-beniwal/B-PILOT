@@ -20,10 +20,24 @@ Read-only: this only *reads* stored run documents; it never touches hardware.
 from __future__ import annotations
 
 import os
+import socket
 import sys
 from datetime import datetime
 
 os.environ.setdefault("QT_API", "pyqt5")
+
+# pymongo has no default *read* timeout — only a connect/server-selection
+# timeout — so a server that accepts the connection but then stops
+# responding mid-query (a flaky replica, a dropped connection, a very slow
+# unindexed range) blocks the calling thread forever with no exception ever
+# raised. That's indistinguishable from "the loading spinner never ends,"
+# which is exactly what turning a page beyond the first one looked like on
+# redwood. A blanket socket timeout turns that failure mode into a bounded,
+# per-run exception (already caught by `except Exception: continue` in
+# `_page_from_uids`) instead of an unrecoverable hang. Safe to set globally
+# here because the viewer always runs as its own separate process (see
+# module docstring) — this never touches the EPICS/hardware process.
+socket.setdefaulttimeout(30)
 
 from PyQt5 import QtCore  # noqa: E402
 from PyQt5 import QtWidgets  # noqa: E402
@@ -72,8 +86,18 @@ def _catalog_from_iconfig() -> str:
 
 
 def load_defaults() -> dict:
-    """Connection defaults: the account's databroker catalog + empty overrides."""
-    return {"catalog": _catalog_from_iconfig(), "uri": "", "nexus_dir": ""}
+    """Connection defaults: the active profile's settings, else iconfig.yml auto-detect.
+
+    ``databroker_catalog`` (Configuration → Data Viewer) takes priority when
+    set; an empty profile value preserves the original zero-config behavior
+    of guessing the catalog from the logged-in account.
+    """
+    catalog = _config.get("databroker_catalog") or _catalog_from_iconfig()
+    return {
+        "catalog": catalog,
+        "uri": _config.get("databroker_uri") or "",
+        "nexus_dir": _config.get("databroker_nexus_dir") or "",
+    }
 
 
 def connect_catalog(catalog: str, uri: str = "") -> tuple:
@@ -147,16 +171,18 @@ def _all_uids(cat) -> list:
 def _page_from_uids(cat, uids: list, offset: int, limit: int = _PAGE_SIZE, progress_cb=None) -> list:
     """Return [(uid, start, stop), …] for one page, newest first.
 
-    ``offset`` counts back from the newest run (0 = most recent page).
+    ``databroker`` catalogs iterate **newest-first** natively (the same
+    convention behind ``catalog[-1]`` meaning "most recent run" — the
+    underlying Mongo query sorts by ``time`` descending), so ``offset``
+    counts *forward* from the head of ``uids``: 0 is the most recent page.
+    A previous version of this counted backward from the tail assuming
+    oldest-first order, which was backwards in practice — it showed the
+    *oldest* runs on page 1 instead of the newest (see DECISIONS.md).
     ``progress_cb(done, total)`` — if given — is invoked periodically while
     fetching per-run metadata, since that's a per-uid catalog round-trip and
-    can be slow on a remote MongoDB catalog for older pages.
+    can be slow on a remote MongoDB catalog.
     """
-    total = len(uids)
-    end = total - offset
-    if end <= 0:
-        return []
-    window = uids[max(0, end - limit):end]
+    window = uids[offset:offset + limit]
     out: list[tuple] = []
     for i, uid in enumerate(window):
         try:

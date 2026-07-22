@@ -37,8 +37,8 @@ GUI_DIR = os.path.dirname(os.path.abspath(__file__))   # .../<bundle>/gui_qt
 BUNDLE_DIR = os.path.dirname(GUI_DIR)                   # parent of gui_qt (e.g. gui/)
 
 # Files shipped alongside the GUI package — they move *with* the GUI bundle:
-CONFIG_PATH = _abs(BUNDLE_DIR, "gui_config.json")
-DEVICE_MANIFEST = _abs(BUNDLE_DIR, "device_manifest.yml")
+CONFIG_PATH = _abs(BUNDLE_DIR, "gui_config.json")  # tiny pointer: {"active_profile": name}
+PROFILES_DIR = _abs(BUNDLE_DIR, "profiles")         # one JSON file per beamline profile
 TEST_PLANS_DIR = _abs(BUNDLE_DIR, "test_plans")  # unused by default; kept for back-compat
 EMBEDDED_STARTER = _abs(BUNDLE_DIR, "embedded_kernel_starter.sh")
 SESSION_RECORDER = _abs(GUI_DIR, "session_recorder.py")

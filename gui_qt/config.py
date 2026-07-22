@@ -1,4 +1,4 @@
-"""Persistent GUI configuration (JSON on disk).
+"""Persistent GUI configuration, organized into per-beamline **profiles**.
 
 Small, dependency-free settings store for things the user should be able to
 change without editing code:
@@ -12,23 +12,57 @@ change without editing code:
   visibility card).
 * **Launch** — ``bluesky_startup``: the command(s) run in the console when the
   user clicks *Load Bluesky*.
+* **Devices** — ``device_search_paths`` (directories scanned by
+  :mod:`device_discovery`) and ``device_selection`` (per-name shown/hidden).
+
+All of the above (plus Session/Appearance) live in a **profile** — a folder
+per beamline under :data:`PROFILES_DIR`, e.g. ``profiles/20ide/``,
+``profiles/20idd/`` — so a different beamline (different plans, devices,
+launch scripts, screen/kernel naming) is a different profile, loadable/
+editable/saveable independently, rather than a single hand-edited file. Only
+one file, a tiny pointer at :data:`CONFIG_PATH`
+(``{"active_profile": "20ide"}``), says which profile is active (i.e. which
+beamline folder is currently selected — not to be confused with the
+default/active split described next).
+
+Each profile folder holds **two** files, not one:
+
+* ``default_config.json`` — the shared baseline for that beamline. Meant to
+  be committed to git and handed between beamline staff.
+* ``active_config.json`` — the live, day-to-day settings actually read by
+  the running GUI and written on every *Save*. Gitignored: it's
+  per-workstation state, bootstrapped as a copy of ``default_config.json``
+  the first time that beamline is touched on a given checkout, and free to
+  diverge from then on. The Configuration dialog's *Restore Defaults*
+  button reloads (but doesn't yet persist) the default; its explicit
+  *Save as Default* button is the only thing that writes back to
+  ``default_config.json``.
 
 Defaults come from :mod:`plan_parser` (paths) so there is a single source of
-truth for the built-in scope; the JSON file only stores user overrides.  The
-Configuration dialog reads/writes through here, and the panels read it live, so
-changes apply without a restart.
+truth for the built-in scope. Both files are otherwise **self-documenting**
+— every setting is written out in full, even where it matches the built-in
+default — with one exception: the handful of keys in
+:data:`_WORKSTATION_KEYS` (paths derived from *this* GUI's own location, plus
+one piece of pure runtime state) are only written when they've been
+explicitly overridden. That's what keeps a workstation-specific absolute
+path out of a profile you commit to git and hand to another beamline. The
+Configuration dialog reads/writes through here, and the panels read it
+live, so changes apply without a restart (except UI scale).
 """
 from __future__ import annotations
 
 import json
+import os
+import shutil
 
 from . import paths as _paths
 from . import plan_parser as _P
 
-# Where the user overrides live — in the GUI bundle dir, next to the manifest.
+# Tiny pointer file: {"active_profile": "<name>"}.
 CONFIG_PATH = _paths.CONFIG_PATH
+PROFILES_DIR = _paths.PROFILES_DIR
 
-# Built-in defaults.  Only keys listed here are persisted / accepted.
+# Built-in defaults. Only keys listed here are persisted / accepted.
 DEFAULTS: dict = {
     "plans_dir": _P.USER_DIR,
     "import_root": _P.SRC_DIR,
@@ -62,15 +96,79 @@ DEFAULTS: dict = {
     # startup (see style.SCALE) — for high-DPI screens (e.g. 4K). Takes
     # effect on the next launch, not live.
     "ui_scale": 1.0,
+    # Devices (see device_discovery.py / device_source.py):
+    "device_search_paths": [],   # directories scanned for __all__-exported devices
+    # {category: {device_name: shown_bool}}; unseen names default shown.
+    "device_selection": {},
+    # Data viewer (gui_qt/viewer.py). `databroker_catalog` is a NAME registered
+    # in ~/.local/share/intake/*.yml — never a credentialed connection string.
+    # Empty means "auto-detect from instrument/iconfig.yml by account", the
+    # viewer's original zero-config behavior.
+    "databroker_catalog": "",
+    # Optional Tiled (or other) URI override — NOT for a credentialed
+    # mongodb://user:pass@host URI: profiles are meant to be committed to git
+    # and shared between beamline staff, so secrets don't belong here. The
+    # MongoDB URIs in iconfig.yml stay where they are, resolved locally per
+    # account via the pre-registered intake catalog files.
+    "databroker_uri": "",
+    "databroker_nexus_dir": "",  # optional folder holding raw NeXus files
+}
+
+# Keys that stay diff-only (omitted from a saved profile unless overridden),
+# even though every other key is written out in full. Two kinds: paths
+# derived from *this* GUI's own location (gui_qt/paths.py) — baking them into
+# a profile would break portability to another workstation — and pure
+# runtime state that isn't really a "setting" at all.
+_WORKSTATION_KEYS = {
+    "plans_dir",
+    "import_root",
+    "launch_script",
+    "embedded_starter_script",
+    "session_dir",
+    "last_kernel_connection_file",
 }
 
 _cache: dict | None = None
+_active_profile: str | None = None
 
 
-def _load_file() -> dict:
-    """Read the JSON override file; return {} if missing/unreadable."""
+def _profile_dir(name: str) -> str:
+    return os.path.join(PROFILES_DIR, name)
+
+
+def _default_path(name: str) -> str:
+    return os.path.join(_profile_dir(name), "default_config.json")
+
+
+def _active_path(name: str) -> str:
+    return os.path.join(_profile_dir(name), "active_config.json")
+
+
+def list_profiles() -> list[str]:
+    """Beamline profile names — subfolders of :data:`PROFILES_DIR` that have
+    a ``default_config.json`` (the source of truth for "this beamline
+    exists"; ``active_config.json`` is bootstrapped lazily, see
+    :func:`_ensure_active`)."""
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as fh:
+        return sorted(
+            name
+            for name in os.listdir(PROFILES_DIR)
+            if os.path.isfile(_default_path(name))
+        )
+    except OSError:
+        return []
+
+
+def _ensure_active(name: str) -> None:
+    """Bootstrap ``active_config.json`` from ``default_config.json`` if the
+    former doesn't exist yet (fresh checkout / new workstation)."""
+    if not os.path.isfile(_active_path(name)):
+        _write_json(_active_path(name), _read_json(_default_path(name)))
+
+
+def _read_json(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except FileNotFoundError:
@@ -79,13 +177,163 @@ def _load_file() -> dict:
         return {}
 
 
+def _write_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def _migrate_flat_profiles_if_needed() -> None:
+    """Upgrade pre-split flat profile files (``profiles/<name>.json``) into
+    ``profiles/<name>/default_config.json`` — the current-tree layout as of
+    2026-07-21, before default/active were split. ``active_config.json`` is
+    left to :func:`_ensure_active` to bootstrap on first read."""
+    try:
+        flat_files = [fn for fn in os.listdir(PROFILES_DIR) if fn.endswith(".json")
+                      and os.path.isfile(os.path.join(PROFILES_DIR, fn))]
+    except OSError:
+        return
+    for fn in flat_files:
+        name = fn[:-5]
+        old_path = os.path.join(PROFILES_DIR, fn)
+        overrides = _read_json(old_path)
+        _write_json(_default_path(name), overrides)
+        os.remove(old_path)
+
+
+def _migrate_legacy_if_needed() -> None:
+    """Upgrade a pre-profile ``gui_config.json`` (flat overrides, no
+    ``active_profile`` key) into the first profile instead of losing it."""
+    pointer = _read_json(CONFIG_PATH)
+    if "active_profile" in pointer or list_profiles():
+        return
+    overrides = {k: v for k, v in pointer.items() if k in DEFAULTS}
+    name = str(overrides.get("beamline") or "default")
+    _write_json(_default_path(name), overrides)
+    _write_json(CONFIG_PATH, {"active_profile": name})
+
+
+def _ensure_active_profile() -> str:
+    _migrate_flat_profiles_if_needed()
+    _migrate_legacy_if_needed()
+    if not list_profiles():
+        _write_json(_default_path("default"), {})
+    available = list_profiles()
+    pointer = _read_json(CONFIG_PATH)
+    name = pointer.get("active_profile")
+    if name not in available:
+        name = available[0]
+        _write_json(CONFIG_PATH, {"active_profile": name})
+    return name
+
+
+def active_profile() -> str:
+    """The currently active profile name (seeds one on first run)."""
+    global _active_profile
+    if _active_profile is None:
+        _active_profile = _ensure_active_profile()
+    return _active_profile
+
+
+def set_active_profile(name: str) -> None:
+    """Make `name` the active profile; must already exist."""
+    global _active_profile, _cache
+    if name not in list_profiles():
+        raise ValueError(f"Unknown profile: {name!r}")
+    _active_profile = name
+    _cache = None
+    _write_json(CONFIG_PATH, {"active_profile": name})
+
+
+def _as_overrides(cfg: dict) -> dict:
+    """Full-effective-config -> the dict actually written to a profile file.
+
+    Every key is kept as-is except :data:`_WORKSTATION_KEYS`, which are
+    dropped when they still match the computed default (see module
+    docstring).
+    """
+    return {
+        k: v
+        for k, v in cfg.items()
+        if k in DEFAULTS and (k not in _WORKSTATION_KEYS or v != DEFAULTS[k])
+    }
+
+
+def new_profile(name: str, clone_from: str | None = None) -> None:
+    """Create profile `name` (self-documenting defaults, or a clone of
+    `clone_from`'s default baseline). Its default and active files start
+    identical."""
+    if not name or name in list_profiles():
+        raise ValueError(f"Invalid or already-existing profile name: {name!r}")
+    if clone_from:
+        overrides = _read_json(_default_path(clone_from))
+    else:
+        overrides = _as_overrides(dict(DEFAULTS))
+    _write_json(_default_path(name), overrides)
+    _write_json(_active_path(name), overrides)
+
+
+def save_profile_as(name: str, values: dict) -> None:
+    """Write `values` (merged over DEFAULTS) as a new profile `name`,
+    self-documenting. Its default and active files start identical."""
+    if not name:
+        raise ValueError("Profile name required")
+    merged = dict(DEFAULTS)
+    merged.update({k: v for k, v in values.items() if k in DEFAULTS})
+    overrides = _as_overrides(merged)
+    _write_json(_default_path(name), overrides)
+    _write_json(_active_path(name), overrides)
+
+
+def save_as_default(name: str, values: dict) -> None:
+    """Promote `values` (merged over DEFAULTS) to profile `name`'s shared
+    ``default_config.json`` only — does not touch ``active_config.json``."""
+    if not name:
+        raise ValueError("Profile name required")
+    merged = dict(DEFAULTS)
+    merged.update({k: v for k, v in values.items() if k in DEFAULTS})
+    _write_json(_default_path(name), _as_overrides(merged))
+
+
+def delete_profile(name: str) -> None:
+    """Delete profile `name`; refuses to delete the last remaining profile."""
+    global _active_profile, _cache
+    available = list_profiles()
+    if name not in available:
+        return
+    if len(available) <= 1:
+        raise ValueError("Cannot delete the last remaining profile")
+    shutil.rmtree(_profile_dir(name), ignore_errors=True)
+    if _active_profile == name:
+        _active_profile = None
+        _cache = None
+
+
+def profile_values(name: str) -> dict:
+    """Effective *live* config for profile `name` (defaults + its active
+    overrides), without activating it. Bootstraps ``active_config.json``
+    from ``default_config.json`` on first access."""
+    _ensure_active(name)
+    merged = dict(DEFAULTS)
+    merged.update({k: v for k, v in _read_json(_active_path(name)).items() if k in DEFAULTS})
+    return merged
+
+
+def default_profile_values(name: str) -> dict:
+    """Effective *default* (shared baseline) config for profile `name`,
+    ignoring any local ``active_config.json`` overrides."""
+    merged = dict(DEFAULTS)
+    merged.update({k: v for k, v in _read_json(_default_path(name)).items() if k in DEFAULTS})
+    return merged
+
+
 def as_dict() -> dict:
-    """Return the effective config (defaults merged with saved overrides)."""
+    """Return the effective config (defaults merged with the active profile)."""
     global _cache
     if _cache is None:
-        merged = dict(DEFAULTS)
-        merged.update({k: v for k, v in _load_file().items() if k in DEFAULTS})
-        _cache = merged
+        _cache = profile_values(active_profile())
     return dict(_cache)
 
 
@@ -95,7 +343,7 @@ def get(key: str):
 
 
 def update(values: dict) -> None:
-    """Merge `values` (known keys only) into the config and persist."""
+    """Merge `values` (known keys only) into the active profile and persist."""
     global _cache
     cfg = as_dict()
     for k, v in values.items():
@@ -106,26 +354,15 @@ def update(values: dict) -> None:
 
 
 def save() -> None:
-    """Write the current config to disk (best effort).
+    """Write the active profile's ``active_config.json`` to disk,
+    self-documenting (best effort).
 
-    Only values that **differ from the computed defaults** are persisted.  The
-    path defaults (``plans_dir``, ``launch_script``, ``session_dir`` …) are
-    derived from the GUI's own location via :mod:`gui_qt.paths`, so on a clean
-    install they equal their default and are *not* written — keeping the saved
-    config free of absolute, machine-specific paths and portable across
-    machines.  Genuine user overrides are still saved.
+    Every setting is written out in full, even where it matches the built-in
+    default — except :data:`_WORKSTATION_KEYS`, which stay diff-only so a
+    profile committed to git doesn't bake in one workstation's absolute
+    paths (see module docstring).
     """
     try:
-        overrides = {k: v for k, v in as_dict().items() if v != DEFAULTS.get(k)}
-        with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
-            json.dump(overrides, fh, indent=2)
+        _write_json(_active_path(active_profile()), _as_overrides(as_dict()))
     except Exception:  # noqa: BLE001
         pass
-
-
-def reset() -> dict:
-    """Restore built-in defaults, persist, and return them."""
-    global _cache
-    _cache = dict(DEFAULTS)
-    save()
-    return dict(_cache)

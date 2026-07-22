@@ -9,6 +9,7 @@ from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
 from . import config
+from . import device_source
 from . import paths
 from . import style as S
 from .console_panel import ConsolePanel
@@ -297,8 +298,11 @@ class MainWindow(QtWidgets.QMainWindow):
         old_scale = config.get("ui_scale")
         dlg = ConfigDialog(self)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
-            # Re-scan the plan browser with the new files scope; the console
-            # reads the launch command live, so nothing else to push.
+            # Re-scan the plan browser with the new files scope, and refresh
+            # the device catalog for the (possibly new) active profile's
+            # beamline — the console reads the launch command live, so
+            # nothing else to push.
+            device_source.set_beamline(config.get("beamline"))
             self.runner.apply_config()
             self._set_toolbar_status("Configuration saved.")
             if config.get("ui_scale") != old_scale:

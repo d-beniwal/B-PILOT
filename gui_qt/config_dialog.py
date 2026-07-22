@@ -1,9 +1,22 @@
-"""Configuration dialog: edit the visible plan files and the launch commands.
+"""Configuration dialog: a profile bar on top, tabbed pages below.
 
-Reachable from the main window's **Python → Configuration…** menu.  Edits are
-written through :mod:`config` on *Save*; the caller then refreshes the panels so
-changes take effect immediately (no restart) — except **UI scale**, which is
-read once at startup (see :mod:`app`) and needs a relaunch to apply.
+Tabs: Paths, Plans, Launch Session, Devices, Appearance — one page each,
+selected via a left-hand list (`QListWidget` + `QStackedWidget`). A profile
+bar above the tabs lets you switch which on-disk profile
+(`B-PILOT/profiles/<name>/{default_config.json,active_config.json}`) you're
+editing; see :mod:`config` for the profile lifecycle — `default_config.json`
+is the shared, git-committed baseline for that beamline, `active_config.json`
+is the live, per-workstation settings actually used day to day. Selecting a
+different profile loads its *active* values into the form for
+editing/preview only — nothing is written to disk or made active until
+*Save*, same as every other field here. *Restore Defaults* previews the
+profile's `default_config.json` instead; *Save as Default* is the only
+action that writes back to it.
+
+Reachable from the main window's **Python → Configuration…** menu. Edits are
+written through :mod:`config` on *Save*; the caller then refreshes the panels
+so changes take effect immediately (no restart) — except **UI scale**, which
+is read once at startup (see :mod:`app`) and needs a relaunch to apply.
 """
 from __future__ import annotations
 
@@ -12,44 +25,198 @@ import os
 from PyQt5 import QtWidgets
 
 from . import config
+from . import device_discovery as ddisc
+from . import device_source
+from . import paths as _paths
 from . import plan_parser as P
 from . import style as S
 
 
 class ConfigDialog(QtWidgets.QDialog):
-    """Modal dialog for the Files/visibility (search scope) + Launch (startup) settings."""
+    """Modal dialog: profile bar + tabbed Paths/Plans/Launch Session/Devices/Appearance."""
 
     def __init__(self, parent=None) -> None:
-        """Build the form pre-filled from the current :mod:`config` values."""
+        """Build every tab's widgets once, then populate them from the active profile."""
         super().__init__(parent)
         self.setWindowTitle("Configuration")
-        self.setMinimumWidth(S.px(600))
+        self.setMinimumWidth(S.px(760))
+        self.setMinimumHeight(S.px(520))
 
-        cfg = config.as_dict()
+        self._current_profile = config.active_profile()
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(8)
 
-        outer.addWidget(self._build_files_card(cfg))
-        outer.addWidget(self._build_visibility_card(cfg))
-        outer.addWidget(self._build_launch_card(cfg))
-        outer.addWidget(self._build_session_card(cfg))
-        outer.addWidget(self._build_appearance_card(cfg))
-        outer.addStretch(1)
+        outer.addLayout(self._build_profile_bar())
+
+        body = QtWidgets.QHBoxLayout()
+        body.setSpacing(8)
+
+        self._tab_list = QtWidgets.QListWidget()
+        self._tab_list.setFixedWidth(S.px(140))
+        self._stack = QtWidgets.QStackedWidget()
+
+        # Build order matters (Plans depends on Paths' plans_dir field); it
+        # happens to match the desired tab display order too.
+        pages = [
+            ("Paths", self._page(self._build_files_card())),
+            ("Plans", self._page(self._build_visibility_card())),
+            ("Launch Session", self._page(self._build_launch_card(), self._build_session_card())),
+            ("Devices", self._page(self._build_devices_card())),
+            ("Data Viewer", self._page(self._build_data_viewer_card())),
+            ("Appearance", self._page(self._build_appearance_card())),
+        ]
+        for title, page in pages:
+            self._tab_list.addItem(title)
+            self._stack.addWidget(page)
+        self._tab_list.currentRowChanged.connect(self._stack.setCurrentIndex)
+
+        body.addWidget(self._tab_list)
+        body.addWidget(self._stack, 1)
+        outer.addLayout(body, 1)
+
         outer.addWidget(self._build_buttons())
 
-    # ── Files (plan search scope) ────────────────────────────────────────────────
+        self._load_from(config.as_dict())
+        self._tab_list.setCurrentRow(0)
 
-    def _build_files_card(self, cfg: dict) -> QtWidgets.QWidget:
-        card = S.make_card("Files  (which plans the runner shows)")
+    @staticmethod
+    def _page(*widgets: QtWidgets.QWidget) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for w in widgets:
+            layout.addWidget(w)
+        layout.addStretch(1)
+        return page
+
+    # ── Profile bar ──────────────────────────────────────────────────────────────
+
+    def _build_profile_bar(self) -> QtWidgets.QLayout:
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(S.LabelRight("Profile:"))
+        self._profile_combo = QtWidgets.QComboBox()
+        self._profile_combo.setMinimumWidth(S.px(160))
+        self._profile_combo.setToolTip(
+            "Beamline configuration profile. Each profile is a folder "
+            "(profiles/<name>/) holding a shared default_config.json and a "
+            "live active_config.json — paths, plans, launch/session commands, "
+            "devices, and appearance all travel together."
+        )
+        self._refresh_profile_combo()
+        self._profile_combo.currentTextChanged.connect(self._on_profile_selected)
+        row.addWidget(self._profile_combo)
+
+        new_btn = QtWidgets.QPushButton("New…")
+        new_btn.setToolTip("Create a new profile, cloned from the one currently shown.")
+        new_btn.clicked.connect(self._new_profile)
+        save_as_btn = QtWidgets.QPushButton("Save As…")
+        save_as_btn.setToolTip("Save the current form values as a new profile.")
+        save_as_btn.clicked.connect(self._save_profile_as)
+        save_default_btn = QtWidgets.QPushButton("Save as Default")
+        save_default_btn.setToolTip(
+            "Overwrite this profile's shared default_config.json with the "
+            "current form values. This is the git-committed baseline other "
+            "workstations reset to — use deliberately."
+        )
+        save_default_btn.clicked.connect(self._save_as_default)
+        delete_btn = QtWidgets.QPushButton("Delete")
+        delete_btn.setToolTip("Delete the selected profile (at least one must remain).")
+        delete_btn.clicked.connect(self._delete_profile)
+
+        row.addWidget(new_btn)
+        row.addWidget(save_as_btn)
+        row.addWidget(save_default_btn)
+        row.addWidget(delete_btn)
+        row.addStretch(1)
+        return row
+
+    def _refresh_profile_combo(self) -> None:
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.clear()
+        self._profile_combo.addItems(config.list_profiles())
+        idx = self._profile_combo.findText(self._current_profile)
+        self._profile_combo.setCurrentIndex(max(0, idx))
+        self._profile_combo.blockSignals(False)
+
+    def _on_profile_selected(self, name: str) -> None:
+        if not name or name == self._current_profile:
+            return
+        self._current_profile = name
+        self._load_from(config.profile_values(name))
+
+    def _new_profile(self) -> None:
+        name, ok = QtWidgets.QInputDialog.getText(self, "New profile", "Profile name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        try:
+            config.new_profile(name, clone_from=self._current_profile)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "New profile", str(exc))
+            return
+        self._current_profile = name
+        self._refresh_profile_combo()
+        self._load_from(config.profile_values(name))
+
+    def _save_profile_as(self) -> None:
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save profile as", "Profile name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        config.save_profile_as(name, self.values())
+        self._current_profile = name
+        self._refresh_profile_combo()
+
+    def _save_as_default(self) -> None:
+        name = self._current_profile
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Save as Default",
+            f"Overwrite the shared default_config.json for '{name}' with the "
+            "current form values? This is the git-committed baseline other "
+            "workstations reset to.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
+        config.save_as_default(name, self.values())
+
+    def _delete_profile(self) -> None:
+        name = self._profile_combo.currentText()
+        if not name:
+            return
+        if len(config.list_profiles()) <= 1:
+            QtWidgets.QMessageBox.warning(
+                self, "Delete profile", "Cannot delete the last remaining profile."
+            )
+            return
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Delete profile",
+            f"Delete profile '{name}'? This cannot be undone.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
+        config.delete_profile(name)
+        self._current_profile = config.active_profile()
+        self._refresh_profile_combo()
+        self._load_from(config.profile_values(self._current_profile))
+
+    # ── Paths ────────────────────────────────────────────────────────────────────
+
+    def _build_files_card(self) -> QtWidgets.QWidget:
+        card = S.make_card("Paths  (where the runner looks for plans)")
         grid = QtWidgets.QGridLayout()
         grid.setColumnStretch(1, 1)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
 
-        # Plans directory (scanned for .py files)
-        self._plans_dir = QtWidgets.QLineEdit(cfg["plans_dir"])
+        self._plans_dir = QtWidgets.QLineEdit()
         self._plans_dir.setToolTip(
             "Folder scanned for plan .py files (top level + one subfolder deep)."
         )
@@ -57,8 +224,7 @@ class ConfigDialog(QtWidgets.QDialog):
         grid.addWidget(self._plans_dir, 0, 1)
         grid.addWidget(self._browse_button(self._plans_dir), 0, 2)
 
-        # Import root (module resolution for the generated import line)
-        self._import_root = QtWidgets.QLineEdit(cfg["import_root"])
+        self._import_root = QtWidgets.QLineEdit()
         self._import_root.setToolTip(
             "Root the 'from <module> import <plan>' line is resolved against.\n"
             "The module = plan file path relative to this root.\n"
@@ -69,8 +235,7 @@ class ConfigDialog(QtWidgets.QDialog):
         grid.addWidget(self._import_root, 1, 1)
         grid.addWidget(self._browse_button(self._import_root), 1, 2)
 
-        # Default plan file (checked on startup)
-        self._default_file = QtWidgets.QLineEdit(cfg["default_plan_file"])
+        self._default_file = QtWidgets.QLineEdit()
         self._default_file.setToolTip(
             "File in the plans directory checked (shown) by default on startup."
         )
@@ -80,23 +245,23 @@ class ConfigDialog(QtWidgets.QDialog):
         card.body.addLayout(grid)
         return card
 
-    # ── Plan visibility (which files show as rows in the file browser) ──────────
+    # ── Plans (plan visibility) ──────────────────────────────────────────────────
 
-    def _build_visibility_card(self, cfg: dict) -> QtWidgets.QWidget:
+    def _build_visibility_card(self) -> QtWidgets.QWidget:
         card = S.make_card("Plan visibility  (which files appear in the User files panel)")
 
         self._visibility_checks: dict[str, QtWidgets.QCheckBox] = {}
-        self._visible_files_initial = set(cfg.get("visible_plan_files") or [])
+        self._visible_files_initial: set[str] = set()
 
         btn_row = QtWidgets.QHBoxLayout()
         select_all_btn = QtWidgets.QPushButton("Select all")
-        select_all_btn.clicked.connect(lambda: self._set_all_visibility(True))
+        select_all_btn.clicked.connect(lambda: self._set_all_checked(self._visibility_checks, True))
         deselect_all_btn = QtWidgets.QPushButton("Deselect all")
-        deselect_all_btn.clicked.connect(lambda: self._set_all_visibility(False))
+        deselect_all_btn.clicked.connect(lambda: self._set_all_checked(self._visibility_checks, False))
         refresh_btn = QtWidgets.QPushButton("Refresh list")
         refresh_btn.setToolTip(
-            "Re-scan the Plans directory above (picks up files added/removed "
-            "on disk, or an edited Plans directory field)."
+            "Re-scan the Plans directory (Paths tab) — picks up files added/"
+            "removed on disk, or an edited Plans directory field."
         )
         refresh_btn.clicked.connect(self._rebuild_visibility_list)
         btn_row.addWidget(select_all_btn)
@@ -115,7 +280,6 @@ class ConfigDialog(QtWidgets.QDialog):
         vis_scroll.setMinimumHeight(S.px(160))
         card.body.addWidget(vis_scroll)
 
-        self._rebuild_visibility_list()
         # Re-scan automatically when the Plans directory field is edited.
         self._plans_dir.editingFinished.connect(self._rebuild_visibility_list)
 
@@ -124,8 +288,7 @@ class ConfigDialog(QtWidgets.QDialog):
     def _rebuild_visibility_list(self) -> None:
         """Re-scan the (possibly just-edited) Plans directory and rebuild the list.
 
-        Preserves already-toggled checkbox states across a rescan, same pattern
-        as :meth:`PlanRunnerPanel._populate_file_browser`.
+        Preserves already-toggled checkbox states across a rescan.
         """
         plans_dir = self._plans_dir.text().strip()
         old = {rel: cb.isChecked() for rel, cb in self._visibility_checks.items()}
@@ -152,13 +315,14 @@ class ConfigDialog(QtWidgets.QDialog):
             self._visibility_layout.addWidget(cb)
         self._visibility_layout.addStretch(1)
 
-    def _set_all_visibility(self, checked: bool) -> None:
-        for cb in self._visibility_checks.values():
+    @staticmethod
+    def _set_all_checked(checks: dict[str, QtWidgets.QCheckBox], checked: bool) -> None:
+        for cb in checks.values():
             cb.setChecked(checked)
 
-    # ── Launch Bluesky command(s) ────────────────────────────────────────────────
+    # ── Launch Session: Load Bluesky command(s) ──────────────────────────────────
 
-    def _build_launch_card(self, cfg: dict) -> QtWidgets.QWidget:
+    def _build_launch_card(self) -> QtWidgets.QWidget:
         card = S.make_card("Launch  (Load Bluesky command)")
         card.body.addWidget(
             QtWidgets.QLabel(
@@ -166,7 +330,7 @@ class ConfigDialog(QtWidgets.QDialog):
                 "(one command per line — CONNECTS TO HARDWARE on a beamline):"
             )
         )
-        self._startup = QtWidgets.QPlainTextEdit(cfg["bluesky_startup"])
+        self._startup = QtWidgets.QPlainTextEdit()
         self._startup.setObjectName("mono")
         self._startup.setFixedHeight(S.px(90))
         self._startup.setToolTip(
@@ -180,7 +344,6 @@ class ConfigDialog(QtWidgets.QDialog):
             "Keep the IPython kernel running when the GUI closes "
             "(so it can be reattached)"
         )
-        self._keep_kernel.setChecked(bool(cfg["keep_kernel_on_exit"]))
         self._keep_kernel.setToolTip(
             "On: closing the GUI leaves the kernel (and any running plan) alive; "
             "relaunch and use Console → Attach to reconnect.\n"
@@ -189,17 +352,18 @@ class ConfigDialog(QtWidgets.QDialog):
         card.body.addWidget(self._keep_kernel)
         return card
 
-    # ── Session (single kernel per beamline) ─────────────────────────────────────
+    # ── Launch Session: one kernel per beamline ──────────────────────────────────
 
-    def _build_session_card(self, cfg: dict) -> QtWidgets.QWidget:
+    def _build_session_card(self) -> QtWidgets.QWidget:
         card = S.make_card("Session  (one kernel per beamline)")
         grid = QtWidgets.QGridLayout()
         grid.setColumnStretch(1, 1)
 
-        self._beamline = QtWidgets.QLineEdit(cfg["beamline"])
+        self._beamline = QtWidgets.QLineEdit()
         self._beamline.setToolTip(
             "Identifies the single interactive kernel for this beamline "
-            "(screen session name + fixed connection-file path)."
+            "(screen session name + fixed connection-file path) and the "
+            "device catalog used by this profile."
         )
         grid.addWidget(S.LabelRight("Beamline id:"), 0, 0)
         grid.addWidget(self._beamline, 0, 1)
@@ -209,7 +373,6 @@ class ConfigDialog(QtWidgets.QDialog):
         self._use_screen = QtWidgets.QCheckBox(
             "Host the kernel in a named 'screen' session (recommended)"
         )
-        self._use_screen.setChecked(bool(cfg["use_screen"]))
         self._use_screen.setToolTip(
             "On: the kernel runs inside 'screen bluesky-kernel-<beamline>' so it "
             "survives the GUI and staff can attach a terminal with\n"
@@ -218,10 +381,9 @@ class ConfigDialog(QtWidgets.QDialog):
         )
         card.body.addWidget(self._use_screen)
 
-        # External launcher (used when Launch mode = "Launch script").
         srow = QtWidgets.QGridLayout()
         srow.setColumnStretch(1, 1)
-        self._launch_script = QtWidgets.QLineEdit(cfg["launch_script"])
+        self._launch_script = QtWidgets.QLineEdit()
         self._launch_script.setToolTip(
             "Shell script run by Launch when the toolbar Launch mode is set to "
             "'Launch script' (e.g. blueskyStarter.sh). Called as:\n"
@@ -231,7 +393,7 @@ class ConfigDialog(QtWidgets.QDialog):
         srow.addWidget(self._launch_script, 0, 1)
         srow.addWidget(self._browse_button(self._launch_script, kind="file"), 0, 2)
 
-        self._embedded_starter = QtWidgets.QLineEdit(cfg["embedded_starter_script"])
+        self._embedded_starter = QtWidgets.QLineEdit()
         self._embedded_starter.setToolTip(
             "Script run for the EMBEDDED kernel launch — activates the env + "
             "records the experiment (like blueskyStarter.sh) but starts a "
@@ -246,9 +408,183 @@ class ConfigDialog(QtWidgets.QDialog):
         card.body.addLayout(srow)
         return card
 
+    # ── Devices (search paths + discover) ────────────────────────────────────────
+
+    def _build_devices_card(self) -> QtWidgets.QWidget:
+        card = S.make_card("Devices  (search paths + discovered device names)")
+
+        card.body.addWidget(
+            QtWidgets.QLabel(
+                "Directories scanned for device-defining .py files (never imported "
+                "— only their __all__ list is read):"
+            )
+        )
+        paths_row = QtWidgets.QHBoxLayout()
+        self._device_paths_widget = QtWidgets.QListWidget()
+        self._device_paths_widget.setFixedHeight(S.px(70))
+        paths_row.addWidget(self._device_paths_widget, 1)
+        paths_btns = QtWidgets.QVBoxLayout()
+        add_path_btn = QtWidgets.QPushButton("Add…")
+        add_path_btn.clicked.connect(self._add_device_path)
+        remove_path_btn = QtWidgets.QPushButton("Remove")
+        remove_path_btn.clicked.connect(self._remove_device_path)
+        paths_btns.addWidget(add_path_btn)
+        paths_btns.addWidget(remove_path_btn)
+        paths_btns.addStretch(1)
+        paths_row.addLayout(paths_btns)
+        card.body.addLayout(paths_row)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        discover_btn = QtWidgets.QPushButton("Discover")
+        discover_btn.setToolTip(
+            "Re-scan the search paths above for __all__-exported device names. "
+            "Newly found devices are shown by default; existing checkbox states "
+            "are preserved."
+        )
+        discover_btn.clicked.connect(self._rebuild_device_list)
+        select_all_btn = QtWidgets.QPushButton("Select all")
+        select_all_btn.clicked.connect(lambda: self._set_all_device_checked(True))
+        deselect_all_btn = QtWidgets.QPushButton("Deselect all")
+        deselect_all_btn.clicked.connect(lambda: self._set_all_device_checked(False))
+        btn_row.addWidget(discover_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(select_all_btn)
+        btn_row.addWidget(deselect_all_btn)
+        card.body.addLayout(btn_row)
+
+        # category -> name -> checkbox; mirrors the on-disk device_selection shape.
+        self._device_checks: dict[str, dict[str, QtWidgets.QCheckBox]] = {}
+        self._device_selection_initial: dict[str, dict[str, bool]] = {}
+        self._device_container = QtWidgets.QWidget()
+        self._device_layout = QtWidgets.QVBoxLayout(self._device_container)
+        self._device_layout.setContentsMargins(2, 2, 2, 2)
+        self._device_layout.setSpacing(2)
+        dev_scroll = QtWidgets.QScrollArea()
+        dev_scroll.setWidgetResizable(True)
+        dev_scroll.setWidget(self._device_container)
+        dev_scroll.setMinimumHeight(S.px(200))
+        card.body.addWidget(dev_scroll)
+
+        return card
+
+    def _add_device_path(self) -> None:
+        chosen = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select device search directory", _paths.PROJECT_ROOT
+        )
+        if not chosen:
+            return
+        rel = os.path.relpath(chosen, _paths.PROJECT_ROOT)
+        value = rel if not rel.startswith("..") else chosen
+        self._device_paths_widget.addItem(value)
+        self._rebuild_device_list()
+
+    def _remove_device_path(self) -> None:
+        for item in self._device_paths_widget.selectedItems():
+            self._device_paths_widget.takeItem(self._device_paths_widget.row(item))
+        self._rebuild_device_list()
+
+    def _rebuild_device_list(self) -> None:
+        """Re-scan the search paths and rebuild the checkbox list, grouped by category.
+
+        Preserves already-toggled checkbox states across a rescan; a name never
+        seen before defaults to checked (shown) — "everything found is shown
+        by default."
+        """
+        raw_paths = [
+            self._device_paths_widget.item(i).text() for i in range(self._device_paths_widget.count())
+        ]
+        old = {
+            cat: {name: cb.isChecked() for name, cb in names.items()}
+            for cat, names in self._device_checks.items()
+        }
+        resolved = [device_source.resolve_path(p) for p in raw_paths]
+        discovered = ddisc.scan(resolved)
+
+        while self._device_layout.count():
+            item = self._device_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._device_checks.clear()
+
+        by_category: dict[str, list] = {}
+        for device in discovered:
+            by_category.setdefault(device.category, []).append(device)
+
+        for category in sorted(by_category):
+            hdr = QtWidgets.QLabel(category)
+            hdr.setStyleSheet(f"color: {S.MUTED}; font-weight: bold;")
+            self._device_layout.addWidget(hdr)
+            self._device_checks[category] = {}
+            for device in sorted(by_category[category], key=lambda d: d.name.lower()):
+                cb = QtWidgets.QCheckBox(device.name)
+                cb.setToolTip(device.source_file)
+                checked = old.get(category, {}).get(
+                    device.name,
+                    self._device_selection_initial.get(category, {}).get(device.name, True),
+                )
+                cb.setChecked(checked)
+                self._device_checks[category][device.name] = cb
+                self._device_layout.addWidget(cb)
+        self._device_layout.addStretch(1)
+
+    def _set_all_device_checked(self, checked: bool) -> None:
+        for names in self._device_checks.values():
+            for cb in names.values():
+                cb.setChecked(checked)
+
+    # ── Data Viewer (databroker connection) ──────────────────────────────────────
+
+    def _build_data_viewer_card(self) -> QtWidgets.QWidget:
+        card = S.make_card("Data Viewer  (databroker connection)")
+        grid = QtWidgets.QGridLayout()
+        grid.setColumnStretch(1, 1)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+
+        self._databroker_catalog = QtWidgets.QLineEdit()
+        self._databroker_catalog.setToolTip(
+            "Name of a databroker catalog registered in ~/.local/share/intake/*.yml "
+            "(e.g. 'hexm', 'ht_hedm', '1id_hexm') — see instrument/iconfig.yml's "
+            "DATABROKER_CATALOG per account. This is a NAME, not a connection "
+            "string: the actual MongoDB URI (with credentials) is resolved locally "
+            "from the pre-registered intake file, never stored here.\n"
+            "Leave blank to auto-detect from iconfig.yml by the logged-in account."
+        )
+        grid.addWidget(S.LabelRight("Databroker catalog:"), 0, 0)
+        grid.addWidget(self._databroker_catalog, 0, 1)
+
+        self._databroker_uri = QtWidgets.QLineEdit()
+        self._databroker_uri.setToolTip(
+            "Optional Tiled (or other) URI override — when set, this replaces the "
+            "named catalog above. Do NOT put a credentialed mongodb://user:pass@ "
+            "URI here: profiles are meant to be committed to git and shared "
+            "between beamline staff, so secrets don't belong in this field."
+        )
+        grid.addWidget(S.LabelRight("Alternate URI:"), 1, 0)
+        grid.addWidget(self._databroker_uri, 1, 1)
+
+        self._databroker_nexus_dir = QtWidgets.QLineEdit()
+        self._databroker_nexus_dir.setToolTip(
+            "Optional folder holding raw NeXus files alongside catalog records."
+        )
+        grid.addWidget(S.LabelRight("NeXus files dir:"), 2, 0)
+        grid.addWidget(self._databroker_nexus_dir, 2, 1)
+        grid.addWidget(self._browse_button(self._databroker_nexus_dir), 2, 2)
+
+        card.body.addLayout(grid)
+        note = QtWidgets.QLabel(
+            "These are starting defaults for the standalone Data Viewer window "
+            "(python -m gui_qt.viewer) — still editable there per-session."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {S.MUTED};")
+        card.body.addWidget(note)
+        return card
+
     # ── Appearance (display scale) ───────────────────────────────────────────────
 
-    def _build_appearance_card(self, cfg: dict) -> QtWidgets.QWidget:
+    def _build_appearance_card(self) -> QtWidgets.QWidget:
         card = S.make_card("Appearance")
         row = QtWidgets.QHBoxLayout()
         row.addWidget(S.LabelRight("UI scale:"))
@@ -257,7 +593,6 @@ class ConfigDialog(QtWidgets.QDialog):
         self._ui_scale.setSingleStep(0.1)
         self._ui_scale.setDecimals(2)
         self._ui_scale.setSuffix("×")
-        self._ui_scale.setValue(float(cfg["ui_scale"]))
         self._ui_scale.setToolTip(
             "Multiplier applied to every font, widget, and window size — for "
             "high-DPI screens (e.g. 4K). Takes effect on the next launch."
@@ -281,12 +616,16 @@ class ConfigDialog(QtWidgets.QDialog):
         box.button(QtWidgets.QDialogButtonBox.Save).setObjectName("primary")
         box.accepted.connect(self.accept)
         box.rejected.connect(self.reject)
+        box.button(QtWidgets.QDialogButtonBox.RestoreDefaults).setToolTip(
+            "Preview this profile's saved default_config.json. Nothing is "
+            "written until Save."
+        )
         box.button(QtWidgets.QDialogButtonBox.RestoreDefaults).clicked.connect(
-            self._restore_defaults
+            lambda: self._load_from(config.default_profile_values(self._current_profile))
         )
         return box
 
-    # ── Actions ──────────────────────────────────────────────────────────────────
+    # ── Load / collect values ────────────────────────────────────────────────────
 
     def _browse_button(self, target: QtWidgets.QLineEdit, kind: str = "dir"):
         btn = QtWidgets.QPushButton("Browse…")
@@ -309,24 +648,36 @@ class ConfigDialog(QtWidgets.QDialog):
         if chosen:
             target.setText(chosen)
 
-    def _restore_defaults(self) -> None:
-        d = config.DEFAULTS
-        self._plans_dir.setText(d["plans_dir"])
-        self._import_root.setText(d["import_root"])
-        self._default_file.setText(d["default_plan_file"])
-        self._visible_files_initial = set(d["visible_plan_files"])
+    def _load_from(self, cfg: dict) -> None:
+        """Populate every tab's widgets from `cfg` (a full effective-config dict)."""
+        self._plans_dir.setText(cfg["plans_dir"])
+        self._import_root.setText(cfg["import_root"])
+        self._default_file.setText(cfg["default_plan_file"])
+        self._visible_files_initial = set(cfg.get("visible_plan_files") or [])
         self._visibility_checks.clear()
         self._rebuild_visibility_list()
-        self._startup.setPlainText(d["bluesky_startup"])
-        self._keep_kernel.setChecked(bool(d["keep_kernel_on_exit"]))
-        self._beamline.setText(d["beamline"])
-        self._use_screen.setChecked(bool(d["use_screen"]))
-        self._launch_script.setText(d["launch_script"])
-        self._embedded_starter.setText(d["embedded_starter_script"])
-        self._ui_scale.setValue(float(d["ui_scale"]))
+
+        self._startup.setPlainText(cfg["bluesky_startup"])
+        self._keep_kernel.setChecked(bool(cfg["keep_kernel_on_exit"]))
+        self._beamline.setText(cfg["beamline"])
+        self._use_screen.setChecked(bool(cfg["use_screen"]))
+        self._launch_script.setText(cfg["launch_script"])
+        self._embedded_starter.setText(cfg["embedded_starter_script"])
+
+        self._ui_scale.setValue(float(cfg["ui_scale"]))
+
+        self._device_paths_widget.clear()
+        self._device_paths_widget.addItems(cfg.get("device_search_paths") or [])
+        self._device_selection_initial = dict(cfg.get("device_selection") or {})
+        self._device_checks.clear()
+        self._rebuild_device_list()
+
+        self._databroker_catalog.setText(cfg.get("databroker_catalog") or "")
+        self._databroker_uri.setText(cfg.get("databroker_uri") or "")
+        self._databroker_nexus_dir.setText(cfg.get("databroker_nexus_dir") or "")
 
     def values(self) -> dict:
-        """Return the edited settings as a config dict."""
+        """Return the edited settings (all tabs) as a config dict."""
         return {
             "plans_dir": self._plans_dir.text().strip(),
             "import_root": self._import_root.text().strip(),
@@ -341,8 +692,20 @@ class ConfigDialog(QtWidgets.QDialog):
             "launch_script": self._launch_script.text().strip(),
             "embedded_starter_script": self._embedded_starter.text().strip(),
             "ui_scale": self._ui_scale.value(),
+            "device_search_paths": [
+                self._device_paths_widget.item(i).text()
+                for i in range(self._device_paths_widget.count())
+            ],
+            "device_selection": {
+                cat: {name: cb.isChecked() for name, cb in names.items()}
+                for cat, names in self._device_checks.items()
+            },
+            "databroker_catalog": self._databroker_catalog.text().strip(),
+            "databroker_uri": self._databroker_uri.text().strip(),
+            "databroker_nexus_dir": self._databroker_nexus_dir.text().strip(),
         }
 
     def accept(self) -> None:  # noqa: D102
+        config.set_active_profile(self._current_profile)
         config.update(self.values())
         super().accept()

@@ -1,0 +1,93 @@
+{
+  "default_plan_file": "scans_stationary_gui_testing.py",
+  "visible_plan_files": [
+    "scans_stationary_gui_testing.py"
+  ],
+  "bluesky_startup": "from instrument.collection import *",
+  "keep_kernel_on_exit": true,
+  "beamline": "s20idd",
+  "use_screen": true,
+  "launch_mode": "embedded",
+  "dm_experiment": "",
+  "setup_file": "exp_setup.yml",
+  "script_run_mode": "screen",
+  "ui_scale": 1.0,
+  "device_search_paths": [
+    "instrument/devices/s20idd_devices"
+  ],
+  "device_selection": {
+    "other": {
+      "hrm_calc": true,
+      "hem_energy": true,
+      "s20d_pso": true,
+      "fpga_20idd": true,
+      "s20_psofly": true
+    },
+    "motor": {
+      "ic1A": true,
+      "ic2A": true,
+      "ic3A": true,
+      "ic4A": true,
+      "ic5A": true,
+      "ic6A": true,
+      "sic2DA": true,
+      "sic1DA": true,
+      "attenA": true,
+      "foilA": true,
+      "lens1A": true,
+      "lens2A": true,
+      "hrm_piezos": true,
+      "ic2D": true,
+      "ic3D": true,
+      "sic1D": true,
+      "sic4D": true,
+      "attenD": true,
+      "samD": true,
+      "aeroD": true,
+      "tomoD": true,
+      "ffD": true,
+      "lens1D": true,
+      "lens2D": true,
+      "lens3D": true,
+      "lens4D": true,
+      "lensT7": true
+    },
+    "scaler": {
+      "tamm1A": true,
+      "tamm2A": true,
+      "tamm3A": true,
+      "tc32A": true,
+      "pdu_genA": true,
+      "pdu_roofA": true,
+      "cryoA": true,
+      "qpcA": true,
+      "mpc1A": true,
+      "mpc2A": true,
+      "keyence_d": true,
+      "tamm1D": true,
+      "tamm2D": true,
+      "tamm3D": true,
+      "tc32D": true,
+      "jewellD": true,
+      "doorsD": true,
+      "labjack1D": true,
+      "pdu_roofD": true,
+      "pdu_trayD": true
+    },
+    "shutter": {
+      "shutter_a": true,
+      "fsA": true,
+      "shutter_d": true,
+      "fsD": true
+    },
+    "slit": {
+      "slitA": true,
+      "slitDus": true,
+      "slitDds": true,
+      "slitT7": true
+    }
+  },
+  "databroker_catalog": "ht_hedm",
+  "databroker_uri": "",
+  "databroker_nexus_dir": ""
+}
