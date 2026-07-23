@@ -44,6 +44,9 @@ def _short(command: str, limit: int = 80) -> str:
 class QueuePanel(QtWidgets.QWidget):
     """Table view of the persistent plan queue (one per beamline session)."""
 
+    # emitted with the selected item's command text when "Copy to form" is clicked
+    copyToFormRequested = QtCore.pyqtSignal(str)
+
     def __init__(self, console=None, parent=None) -> None:
         """`console` is optional, used only to advise when no kernel is running."""
         super().__init__(parent)
@@ -103,7 +106,13 @@ class QueuePanel(QtWidgets.QWidget):
         delete.clicked.connect(self._delete)
         clear = QtWidgets.QPushButton("Clear finished")
         clear.clicked.connect(self._clear_finished)
-        for w in (self._start_btn, self._pause_btn, up, down, delete, clear):
+        self._copy_btn = QtWidgets.QPushButton("Copy to form")
+        self._copy_btn.setToolTip(
+            "Load the selected plan's command back into the main panel's form "
+            "so you can tweak and resubmit it."
+        )
+        self._copy_btn.clicked.connect(self._copy_to_form)
+        for w in (self._start_btn, self._pause_btn, up, down, delete, clear, self._copy_btn):
             row.addWidget(w)
         row.addStretch(1)
         self._state_lbl = QtWidgets.QLabel("Idle")
@@ -167,6 +176,15 @@ class QueuePanel(QtWidgets.QWidget):
     def _clear_finished(self) -> None:
         qs.clear_finished(self._beamline())
         self._refresh()
+
+    def _copy_to_form(self) -> None:
+        item_id = self._selected_id()
+        if item_id is None:
+            return
+        data = qs.load(self._beamline())
+        item = next((it for it in data["items"] if it["id"] == item_id), None)
+        if item is not None:
+            self.copyToFormRequested.emit(item["command"])
 
     def _on_item_changed(self, item: QtWidgets.QTableWidgetItem) -> None:
         if self._loading or item.column() != 1:

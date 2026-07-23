@@ -112,13 +112,15 @@ def get_catalog(beamline: str | None = None, *, search_paths: list[str] | None =
         return _cache[key]
 
     selection = _config.get("device_selection") or {}
+    overrides = _config.get("device_category_overrides") or {}
     resolved_paths = [resolve_path(p) for p in raw_paths]
     by_cat: dict[str, list[str]] = {}
     for device in _discovery.scan(resolved_paths):
-        cat_selection = selection.get(device.category, {})
+        category = overrides.get(device.name, device.category)
+        cat_selection = selection.get(category, {})
         if not cat_selection.get(device.name, True):  # unseen names default shown
             continue
-        by_cat.setdefault(device.category, []).append(device.name)
+        by_cat.setdefault(category, []).append(device.name)
 
     catalog = DeviceCatalog(bl, by_cat)
     _cache[key] = catalog

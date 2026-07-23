@@ -96,7 +96,7 @@ class ConfigDialog(QtWidgets.QDialog):
     def _build_profile_bar(self) -> QtWidgets.QLayout:
         row = QtWidgets.QHBoxLayout()
         row.addWidget(S.LabelRight("Profile:"))
-        self._profile_combo = QtWidgets.QComboBox()
+        self._profile_combo = S.NoScrollComboBox()
         self._profile_combo.setMinimumWidth(S.px(160))
         self._profile_combo.setToolTip(
             "Beamline configuration profile. Each profile is a folder "
@@ -484,6 +484,12 @@ class ConfigDialog(QtWidgets.QDialog):
         # category -> name -> checkbox; mirrors the on-disk device_selection shape.
         self._device_checks: dict[str, dict[str, QtWidgets.QCheckBox]] = {}
         self._device_selection_initial: dict[str, dict[str, bool]] = {}
+        # {device_name: category} — manual per-profile override of the category
+        # device_discovery infers; see the Devices card's per-device combo below.
+        self._device_category_overrides: dict[str, str] = {}
+        # {device_name: discovered_category} — recomputed on every rescan, used
+        # to know what "(auto)" resolves to and when an override is redundant.
+        self._device_raw_category: dict[str, str] = {}
         self._device_container = QtWidgets.QWidget()
         self._device_layout = QtWidgets.QVBoxLayout(self._device_container)
         self._device_layout.setContentsMargins(2, 2, 2, 2)
@@ -515,16 +521,25 @@ class ConfigDialog(QtWidgets.QDialog):
     def _rebuild_device_list(self) -> None:
         """Re-scan the search paths and rebuild the checkbox list, grouped by category.
 
-        Preserves already-toggled checkbox states across a rescan; a name never
-        seen before defaults to checked (shown) — "everything found is shown
-        by default."
+        Discovery's inferred category is never changed by this — a per-device
+        combo lets the user move a device to a different category for THIS
+        profile only (`self._device_category_overrides`), applied on top of
+        the discovered category before grouping.
+
+        Preserves already-toggled checkbox states across a rescan (keyed by
+        device name only, so moving a device to a new category doesn't lose
+        its state); a name never seen before defaults to checked (shown) —
+        "everything found is shown by default."
         """
         raw_paths = [
             self._device_paths_widget.item(i).text() for i in range(self._device_paths_widget.count())
         ]
-        old = {
-            cat: {name: cb.isChecked() for name, cb in names.items()}
-            for cat, names in self._device_checks.items()
+        # Flat by name (not by category) — a device recategorized during this
+        # session must keep its checked state when it lands in a new group.
+        old_checked: dict[str, bool] = {
+            name: cb.isChecked()
+            for names in self._device_checks.values()
+            for name, cb in names.items()
         }
         resolved = [device_source.resolve_path(p) for p in raw_paths]
         discovered = ddisc.scan(resolved)
@@ -535,10 +550,16 @@ class ConfigDialog(QtWidgets.QDialog):
             if w is not None:
                 w.deleteLater()
         self._device_checks.clear()
+        self._device_raw_category.clear()
 
         by_category: dict[str, list] = {}
         for device in discovered:
-            by_category.setdefault(device.category, []).append(device)
+            self._device_raw_category[device.name] = device.category
+            category = self._device_category_overrides.get(device.name, device.category)
+            by_category.setdefault(category, []).append(device)
+        all_categories = sorted(
+            set(by_category) | set(self._device_category_overrides.values()) | {"other"}
+        )
 
         for category in sorted(by_category):
             hdr = QtWidgets.QLabel(category)
@@ -548,14 +569,86 @@ class ConfigDialog(QtWidgets.QDialog):
             for device in sorted(by_category[category], key=lambda d: d.name.lower()):
                 cb = QtWidgets.QCheckBox(device.name)
                 cb.setToolTip(device.source_file)
-                checked = old.get(category, {}).get(
-                    device.name,
-                    self._device_selection_initial.get(category, {}).get(device.name, True),
-                )
+                checked = old_checked.get(device.name)
+                if checked is None:
+                    checked = self._initial_device_checked(category, device.name)
                 cb.setChecked(checked)
                 self._device_checks[category][device.name] = cb
-                self._device_layout.addWidget(cb)
+
+                combo = self._make_category_combo(device.name, device.category, all_categories)
+
+                row = QtWidgets.QWidget()
+                row_lay = QtWidgets.QHBoxLayout(row)
+                row_lay.setContentsMargins(0, 0, 0, 0)
+                row_lay.setSpacing(6)
+                row_lay.addWidget(cb)
+                row_lay.addWidget(combo)
+                row_lay.addStretch(1)
+                self._device_layout.addWidget(row)
         self._device_layout.addStretch(1)
+
+    def _initial_device_checked(self, category: str, name: str) -> bool:
+        """Fall back to the on-disk `device_selection` for a device with no
+        session-local checked state yet — first under its current (possibly
+        overridden) category, then any category (covers a device recategorized
+        after `device_selection` was last saved under its old category)."""
+        sel = self._device_selection_initial
+        if name in sel.get(category, {}):
+            return sel[category][name]
+        for cat_sel in sel.values():
+            if name in cat_sel:
+                return cat_sel[name]
+        return True
+
+    def _make_category_combo(
+        self, name: str, raw_category: str, all_categories: list[str]
+    ) -> QtWidgets.QComboBox:
+        """Editable dropdown to move `name` into a different category (this
+        profile only) — discovery's own inference is never changed."""
+        combo = S.NoScrollComboBox()
+        combo.setEditable(True)
+        combo.setMinimumWidth(S.px(130))
+        combo.setToolTip(
+            "Move this device to a different category (saved with this profile "
+            "only). Discovery's own filename/class-based inference is unaffected "
+            "— pick '(auto: ...)' to clear the override."
+        )
+        combo.addItem(f"(auto: {raw_category})", None)
+        for cat in all_categories:
+            if cat != raw_category:
+                combo.addItem(cat, cat)
+
+        override = self._device_category_overrides.get(name)
+        if override and override != raw_category:
+            idx = combo.findData(override)
+            if idx < 0:
+                combo.addItem(override, override)
+                idx = combo.count() - 1
+            combo.setCurrentIndex(idx)
+        else:
+            combo.setCurrentIndex(0)
+
+        # `activated` fires when an item is picked from the popup (by click or
+        # keyboard+Enter). For typed-then-Enter text, use the line edit's
+        # `returnPressed` — NOT `editingFinished`: on an editable combo,
+        # opening the popup itself shifts focus off the internal line edit,
+        # which fires `editingFinished` immediately: the handler's
+        # `_rebuild_device_list()` then tears down (and rebuilds) this very
+        # combo mid-popup, snapping it shut before a selection can be made.
+        combo.activated.connect(lambda _i, n=name, c=combo: self._apply_device_category(n, c))
+        combo.lineEdit().returnPressed.connect(
+            lambda n=name, c=combo: self._apply_device_category(n, c)
+        )
+        return combo
+
+    def _apply_device_category(self, name: str, combo: QtWidgets.QComboBox) -> None:
+        text = combo.currentText().strip()
+        raw = self._device_raw_category.get(name)
+        if not text or text.startswith("(auto") or text == raw:
+            self._device_category_overrides.pop(name, None)
+        else:
+            self._device_category_overrides[name] = text
+        self._rebuild_device_list()
 
     def _set_all_device_checked(self, checked: bool) -> None:
         for names in self._device_checks.values():
@@ -698,6 +791,7 @@ class ConfigDialog(QtWidgets.QDialog):
         self._device_paths_widget.clear()
         self._device_paths_widget.addItems(cfg.get("device_search_paths") or [])
         self._device_selection_initial = dict(cfg.get("device_selection") or {})
+        self._device_category_overrides = dict(cfg.get("device_category_overrides") or {})
         self._device_checks.clear()
         self._rebuild_device_list()
 
@@ -731,6 +825,7 @@ class ConfigDialog(QtWidgets.QDialog):
                 cat: {name: cb.isChecked() for name, cb in names.items()}
                 for cat, names in self._device_checks.items()
             },
+            "device_category_overrides": dict(self._device_category_overrides),
             "databroker_catalog": self._databroker_catalog.text().strip(),
             "databroker_uri": self._databroker_uri.text().strip(),
             "databroker_nexus_dir": self._databroker_nexus_dir.text().strip(),

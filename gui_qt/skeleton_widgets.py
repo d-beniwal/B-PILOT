@@ -145,6 +145,34 @@ class _MotorRow(QtWidgets.QWidget):
                 out.append(self.nsteps.text().strip())
         return out
 
+    def set_tokens(self, tokens: list[str]) -> None:
+        """Best-effort inverse of :meth:`tokens` — populate this row from source tokens."""
+        if not tokens:
+            return
+        motor = tokens[0].strip()
+        if motor:
+            idx = self.motor_cb.findText(motor)
+            if idx < 0:
+                # Not in the currently-discovered motor list (e.g. loaded from a
+                # queue item built under a different device selection) — add it
+                # so the restored value is still visible/selected.
+                self.motor_cb.addItem(motor)
+                idx = self.motor_cb.count() - 1
+            self.motor_cb.setCurrentIndex(idx)
+        if self.shape in _LIST_SHAPES:
+            if len(tokens) > 1:
+                raw = tokens[1].strip()
+                if raw.startswith("[") and raw.endswith("]"):
+                    raw = raw[1:-1]
+                self.positions.setText(raw)
+        else:
+            if len(tokens) > 1:
+                self.start.setText(tokens[1].strip())
+            if len(tokens) > 2:
+                self.stop.setText(tokens[2].strip())
+            if self.nsteps is not None and len(tokens) > 3:
+                self.nsteps.setText(tokens[3].strip())
+
 
 class MotorRowsWidget(QtWidgets.QWidget):
     """Repeatable per-motor rows for one of ``scan_skeletons.py``'s six shapes.
@@ -212,3 +240,20 @@ class MotorRowsWidget(QtWidgets.QWidget):
         for row in self._rows:
             out.extend(row.tokens())
         return out
+
+    def load_rows(self, rows: list[list[str]]) -> None:
+        """Replace all rows with `rows` (each a per-motor token list, see :meth:`tokens`).
+
+        Best-effort inverse of the flat `tokens()` list, chunked back into rows
+        by the caller (see `plan_runner.load_from_command`). Grows/shrinks the
+        row count to match; a no-op when `rows` is empty (keeps the current
+        rows rather than dropping to zero, since the floor is always 1).
+        """
+        if not rows:
+            return
+        while len(self._rows) < len(rows):
+            self.add_row()
+        while len(self._rows) > len(rows):
+            self._remove_row(self._rows[-1])
+        for row, tokens in zip(self._rows, rows):
+            row.set_tokens(tokens)

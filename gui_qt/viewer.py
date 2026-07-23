@@ -19,6 +19,7 @@ Read-only: this only *reads* stored run documents; it never touches hardware.
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import sys
@@ -279,6 +280,23 @@ def _short(value, limit: int = 160) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
+def _payload_to_text(payload: dict) -> str:
+    """Flat, human-readable rendering of an export payload (for a .txt export)."""
+    lines: list[str] = []
+    for section, content in payload.items():
+        lines.append(f"=== {section} ===")
+        if isinstance(content, dict):
+            for k, v in content.items():
+                lines.append(f"{k}: {v}")
+        elif isinstance(content, list):
+            for i, item in enumerate(content):
+                lines.append(f"[{i}] {item}")
+        else:
+            lines.append(str(content))
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ── Background catalog worker ───────────────────────────────────────────────────
 
 class _CatalogWorker(QtCore.QObject):
@@ -382,6 +400,50 @@ class _CatalogWorker(QtCore.QObject):
         self._queue.put(("discover", None))
 
 
+# ── Export settings dialog ───────────────────────────────────────────────────────
+
+# key (config.DEFAULTS["viewer_export_fields"]) -> checkbox label
+_EXPORT_FIELD_LABELS = {
+    "summary": "Run summary (scan ID, plan, timing, exit status)",
+    "start_metadata": "Full start-document metadata",
+    "stop_metadata": "Full stop-document metadata",
+    "notes": "Run notes",
+    "file_references": "File/path references",
+    "data_preview": "Data preview table (first 100 rows of the primary stream)",
+}
+
+
+class ExportConfigDialog(QtWidgets.QDialog):
+    """Checkboxes controlling what "Export run…" writes out.
+
+    Persisted per-profile as `viewer_export_fields` (see gui_qt/config.py) —
+    editable here only; nothing is written until Save.
+    """
+
+    def __init__(self, current: dict, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Data Viewer — Export settings")
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.addWidget(
+            QtWidgets.QLabel("Choose what to include when exporting a run:")
+        )
+        self._checks: dict[str, QtWidgets.QCheckBox] = {}
+        for key, label in _EXPORT_FIELD_LABELS.items():
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(bool(current.get(key, key != "data_preview")))
+            self._checks[key] = cb
+            lay.addWidget(cb)
+        box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
+        )
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+
+    def values(self) -> dict:
+        return {k: cb.isChecked() for k, cb in self._checks.items()}
+
+
 # ── Main window ─────────────────────────────────────────────────────────────────
 
 class ViewerWindow(QtWidgets.QMainWindow):
@@ -394,6 +456,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.resize(S.px(1300), S.px(820))
         self._cat = None
         self._current_run = None
+        self._current_uid: str | None = None
+        self._current_start: dict = {}
+        self._current_stop: dict = {}
         self._connecting = False
         self._offset = 0
         self._total = 0
@@ -406,6 +471,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._worker.paged.connect(self._on_page_loaded)
         self._worker.discovered.connect(self._on_catalogs_found)
         self._worker.progress.connect(self._on_worker_progress)
+
+        self._build_menu()
 
         central = QtWidgets.QWidget()
         clay = QtWidgets.QVBoxLayout(central)
@@ -426,6 +493,97 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._conn_status.setText("Not connected — click Connect")
         self.statusBar().showMessage("Click “Connect” to load runs from the catalog.")
 
+    # ── Menu (export) ────────────────────────────────────────────────────────────
+
+    def _build_menu(self) -> None:
+        m = self.menuBar().addMenu("&File")
+        self._export_act = m.addAction("Export run…")
+        self._export_act.setShortcut("Ctrl+E")
+        self._export_act.setToolTip(
+            "Save the selected run's metadata to a file (JSON or text) — "
+            "choose what's included in File → Export settings…."
+        )
+        self._export_act.setEnabled(False)
+        self._export_act.triggered.connect(self._export_run)
+        m.addAction("Export settings…").triggered.connect(self._open_export_settings)
+
+    def _open_export_settings(self) -> None:
+        dlg = ExportConfigDialog(_config.get("viewer_export_fields") or {}, self)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            _config.update({"viewer_export_fields": dlg.values()})
+            self.statusBar().showMessage("Export settings saved.")
+
+    def _export_run(self) -> None:
+        if self._current_uid is None:
+            self.statusBar().showMessage("Select a run first.")
+            return
+        default_name = f"run_{self._current_start.get('scan_id', self._current_uid[:8])}.json"
+        path, chosen_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export run", default_name, "JSON (*.json);;Text (*.txt)"
+        )
+        if not path:
+            return
+        as_text = path.lower().endswith(".txt") or "Text" in chosen_filter
+        payload = self._build_export_payload()
+        try:
+            if as_text:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(_payload_to_text(payload))
+            else:
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, indent=2, default=str)
+        except OSError as exc:
+            self.statusBar().showMessage(f"Export failed: {exc}")
+            return
+        self.statusBar().showMessage(f"Exported to {path}")
+
+    def _build_export_payload(self) -> dict:
+        """Assemble the sections enabled in `viewer_export_fields` for the
+        currently-selected run, reusing the same data the detail tabs show."""
+        fields = _config.get("viewer_export_fields") or {}
+        uid, start, stop = self._current_uid, self._current_start, self._current_stop
+        payload: dict = {}
+        if fields.get("summary", True):
+            payload["summary"] = {
+                "scan_id": start.get("scan_id", "—"),
+                "plan_name": start.get("plan_name", "—"),
+                "started": _fmt_time(start.get("time")),
+                "duration": _fmt_duration(start, stop),
+                "exit_status": stop.get("exit_status", "—"),
+                "num_events": stop.get("num_events", "—"),
+                "uid": uid,
+            }
+        if fields.get("start_metadata", True):
+            payload["start_metadata"] = start
+        if fields.get("stop_metadata", True):
+            payload["stop_metadata"] = stop
+        if fields.get("notes", True) and start.get("notes"):
+            payload["notes"] = start.get("notes")
+        if fields.get("file_references", True):
+            payload["file_references"] = {
+                k: v
+                for k, v in start.items()
+                if any(t in k.lower() for t in ("file", "path", "nexus", "dir"))
+            }
+        if fields.get("data_preview", False) and self._current_run is not None:
+            df = self._data_preview_df()
+            if df is not None:
+                payload["data_preview"] = df.head(100).to_dict(orient="records")
+        return payload
+
+    def _data_preview_df(self):
+        """Best-effort DataFrame for export — loads on demand even if the user
+        never clicked "Load data preview" for this run."""
+        run = self._current_run
+        try:
+            streams = list(run)
+        except Exception:  # noqa: BLE001
+            return None
+        if not streams:
+            return None
+        stream = "primary" if "primary" in streams else streams[0]
+        return self._read_stream_df(run, stream)
+
     # ── Toolbar (connection config) ─────────────────────────────────────────────
 
     def _build_toolbar(self, defaults: dict) -> QtWidgets.QWidget:
@@ -436,7 +594,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         lay.setSpacing(6)
 
         lay.addWidget(QtWidgets.QLabel("Catalog:"))
-        self._catalog = QtWidgets.QComboBox()
+        self._catalog = S.NoScrollComboBox()
         self._catalog.setEditable(True)
         self._catalog.addItem(defaults["catalog"])
         self._catalog.setCurrentText(defaults["catalog"])
@@ -715,6 +873,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if cur is None:
             return
         uid, start, stop = cur.data(QtCore.Qt.UserRole)
+        self._current_uid, self._current_start, self._current_stop = uid, start, stop
         try:
             self._current_run = self._cat[uid]
         except Exception:  # noqa: BLE001
@@ -727,6 +886,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._data_table.setColumnCount(0)
         self._data_info.setText("Click “Load data preview” to read the primary stream.")
         self._data_btn.setEnabled(self._current_run is not None)
+        self._export_act.setEnabled(True)
 
     def _fill_summary(self, uid: str, start: dict, stop: dict) -> None:
         rows = [

@@ -100,6 +100,13 @@ DEFAULTS: dict = {
     "device_search_paths": [],   # directories scanned for __all__-exported devices
     # {category: {device_name: shown_bool}}; unseen names default shown.
     "device_selection": {},
+    # {device_name: category}. Manual per-profile override of the category
+    # device_discovery.scan() infers from filename/class-name — lets a user fix
+    # a wrong/awkward grouping without touching the discovery heuristics
+    # (which stay beamline-agnostic and unchanged). Applied on top of the
+    # discovered category everywhere one is used (device_source.get_catalog()
+    # and the Configuration dialog's Devices tab).
+    "device_category_overrides": {},
     # Data viewer (gui_qt/viewer.py). `databroker_catalog` is a NAME registered
     # in ~/.local/share/intake/*.yml — never a credentialed connection string.
     # Empty means "auto-detect from instrument/iconfig.yml by account", the
@@ -112,6 +119,18 @@ DEFAULTS: dict = {
     # account via the pre-registered intake catalog files.
     "databroker_uri": "",
     "databroker_nexus_dir": "",  # optional folder holding raw NeXus files
+    # Which sections the viewer's "Export run…" writes out (Data Viewer's own
+    # "Export settings…" dialog). data_preview defaults off — it can be large
+    # and, unlike the others, isn't already on screen unless the user asked
+    # for a preview.
+    "viewer_export_fields": {
+        "summary": True,
+        "start_metadata": True,
+        "stop_metadata": True,
+        "notes": True,
+        "file_references": True,
+        "data_preview": False,
+    },
     # Skeleton-scan acquisition modes (see gui_qt/skeleton_widgets.py and
     # plan_parser.SKELETON_SHAPES): {label: {"plan_opener": "<name>",
     # "per_step": "<name>", "plan_closer": "<name>"}}. Hand-curated per beamline

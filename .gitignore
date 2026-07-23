@@ -15,3 +15,7 @@ profiles/*/active_config.json
 # convention as B-PILOT itself being a nested repo inside the non-git
 # mpe_bluesky tree). B-PILOT must never depend on or track it.
 AutoPILOT/
+
+# Local presentation/reference documents (overview + AutoPILOT architecture
+# write-ups and their PDF renders) — working notes, not part of the repo.
+documents/

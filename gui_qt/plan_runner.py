@@ -15,8 +15,10 @@ that into the embedded console.
 """
 from __future__ import annotations
 
+import ast
 import html
 import os
+import re
 
 from PyQt5 import QtCore
 from PyQt5 import QtGui
@@ -30,6 +32,15 @@ from .plan_parser import _NODEFAULT
 from .plan_parser import ParamSpec
 from .plan_parser import RawCode
 from .skeleton_widgets import MotorRowsWidget
+
+# Plan name inside an ``RE(<plan>(...))`` command — mirrors queue_store._RE_PLAN,
+# used to recover a queued command's plan name for `load_from_command`.
+_RE_PLAN = re.compile(r"\bRE\(\s*([A-Za-z_]\w*)\s*\(")
+
+# *args token-count-per-row for each scan_skeletons.py shape (see
+# plan_parser.SKELETON_SHAPES / skeleton_widgets.py's module docstring) — used
+# to chunk a queued command's leading positional tokens back into motor rows.
+_SKELETON_ROW_WIDTH = {"list": 2, "list_grid": 2, "step": 3, "step_grid": 4}
 
 
 class PlanRunnerPanel(QtWidgets.QWidget):
@@ -248,6 +259,129 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     def apply_config(self) -> None:
         """Re-scan the file browser / plan dropdown after a config change."""
         self._refresh_files()
+
+    # ── Load from a queued command ("Copy to form") ─────────────────────────────
+
+    def load_from_command(self, command: str) -> None:
+        """Populate the form from a previously-generated ``RE(plan(...))`` command.
+
+        Used by the queue panel's "Copy to form" action. `_make_re_line` always
+        emits ordinary plan args as keywords (`name=value`) — only a
+        scan_skeletons.py plan's leading `*args` (motor rows) are positional —
+        which makes this a tractable, if best-effort, reverse of that method
+        rather than a full Python-source interpreter. A field that can't be
+        restored (e.g. the queue item was hand-edited) is left at its default
+        and reported in the status line rather than aborting the whole load.
+        """
+        match = _RE_PLAN.search(command or "")
+        if not match:
+            self._flash_status("Couldn't find a plan call in that command.")
+            return
+        plan_name = match.group(1)
+        if plan_name not in self._plan_list:
+            self._flash_status(f"Plan '{plan_name}' isn't in a currently-visible file.")
+            return
+
+        self._plan_cb.setCurrentText(plan_name)  # triggers _on_plan_change
+
+        try:
+            call = self._find_plan_call(command, plan_name)
+        except SyntaxError:
+            call = None
+        if call is None:
+            self._flash_status(f"Loaded '{plan_name}' — couldn't parse its arguments.")
+            return
+
+        skipped: list[str] = []
+        if self._skeleton:
+            self._apply_skeleton_args(call, skipped)
+        for kw in call.keywords:
+            if kw.arg is None or kw.arg not in self._param_widgets:
+                continue  # **kwargs splat (never emitted here), or a skeleton-only name
+            try:
+                self._apply_param_value(kw.arg, kw.value)
+            except Exception:  # noqa: BLE001 — one bad field shouldn't abort the rest
+                skipped.append(kw.arg)
+
+        self._live_validate()
+        if skipped:
+            self._flash_status(f"Loaded '{plan_name}' — couldn't restore: {', '.join(skipped)}")
+        else:
+            self._flash_status(f"Loaded '{plan_name}' from queue.")
+
+    @staticmethod
+    def _find_plan_call(command: str, plan_name: str) -> ast.Call | None:
+        """Find the ``plan_name(...)`` call node nested inside the command's ``RE(...)``."""
+        tree = ast.parse(command)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == plan_name
+            ):
+                return node
+        return None
+
+    def _apply_param_value(self, name: str, value_node: ast.expr) -> None:
+        """Set `self._param_widgets[name]`'s widget from a parsed argument value."""
+        spec, widget = self._param_widgets[name]
+        if spec.dtype == "device":
+            if not isinstance(value_node, ast.Name):
+                raise ValueError("expected a bare device reference")
+            idx = widget.findText(value_node.id)
+            if idx < 0:
+                widget.addItem(value_node.id)
+                idx = widget.count() - 1
+            widget.setCurrentIndex(idx)
+        elif spec.dtype == "device_list":
+            if not isinstance(value_node, (ast.List, ast.Tuple)):
+                raise ValueError("expected a device list")
+            names = {elt.id for elt in value_node.elts if isinstance(elt, ast.Name)}
+            for i in range(widget.count()):
+                item = widget.item(i)
+                item.setSelected(item.text() in names)
+        elif spec.dtype == "bool":
+            widget.setChecked(bool(ast.literal_eval(value_node)))
+        elif spec.dtype == "positions":
+            triples = ast.literal_eval(value_node)
+            widget.setPlainText(
+                "\n".join(", ".join(str(v) for v in triple) for triple in triples)
+            )
+        elif spec.dtype == "choice":
+            widget.setCurrentText(str(ast.literal_eval(value_node)))
+        else:  # str / int / float / unknown -> line edit
+            widget.setText(str(ast.literal_eval(value_node)))
+
+    def _apply_skeleton_args(self, call: ast.Call, skipped: list[str]) -> None:
+        """Restore the motor rows + acquisition mode for a scan_skeletons.py plan."""
+        shape, _relative = self._skeleton
+        width = _SKELETON_ROW_WIDTH.get(shape)
+        if width and call.args:
+            try:
+                tokens = [ast.unparse(node) for node in call.args]
+                rows = [tokens[i : i + width] for i in range(0, len(tokens), width)]
+                self._motor_rows_widget.load_rows(rows)
+            except Exception:  # noqa: BLE001
+                skipped.append("Motors")
+
+        kw_values = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        opener, per_step, closer = (
+            kw_values.get("plan_opener"),
+            kw_values.get("per_step"),
+            kw_values.get("plan_closer"),
+        )
+        if isinstance(opener, ast.Name) and isinstance(per_step, ast.Name) and isinstance(closer, ast.Name):
+            modes = config.get("acquisition_modes") or {}
+            for label, mode in modes.items():
+                if (
+                    mode.get("plan_opener") == opener.id
+                    and mode.get("per_step") == per_step.id
+                    and mode.get("plan_closer") == closer.id
+                ):
+                    self._acq_mode_combo.setCurrentText(label)
+                    break
+            else:
+                skipped.append("Acquisition mode")
 
     def _on_file_toggle(self, _checked: bool) -> None:
         self._refresh_plan_dropdown(preserve_selection=True)

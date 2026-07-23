@@ -42,6 +42,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.queue = QueuePanel(self.console)
         self.runner.runRequested.connect(self._on_run)
         self.runner.queueRequested.connect(self._on_queue)
+        self.queue.copyToFormRequested.connect(self.runner.load_from_command)
         self.console.started.connect(self._on_console_started)
         self.console.ready.connect(self._on_console_ready)
         self.console.attach_failed.connect(self._on_attach_failed)
