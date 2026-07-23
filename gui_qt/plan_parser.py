@@ -370,11 +370,13 @@ def file_to_module(filepath: str, src_dir: str | None = None) -> str:
     return rel.replace(os.sep, ".").removesuffix(".py")
 
 
-def scan_user_dir(user_dir: str) -> list[tuple]:
-    """Shallow scan; returns (display_name, kind, abs_path, depth).
+def scan_user_dir(user_dir: str, _depth: int = 0) -> list[tuple]:
+    """Recursive scan; returns (display_name, kind, abs_path, depth).
 
-    ``depth`` is 0 for top-level entries and 1 for files nested one directory
-    deep (used by the GUI to indent).
+    ``depth`` counts directory levels below ``user_dir`` (0 for top-level
+    entries, 1 for one directory deep, etc. — used by the GUI to indent).
+    Recurses to unlimited depth so plans nested in sub-sub-directories (e.g.
+    a per-beamline plans dir's own ``user_plans/`` folder) are found too.
     """
     rows: list[tuple] = []
     try:
@@ -388,17 +390,8 @@ def scan_user_dir(user_dir: str) -> list[tuple]:
         if entry.name.startswith("__"):
             continue
         if entry.is_dir():
-            rows.append((entry.name + "/", "dir", entry.path, 0))
-            try:
-                for sub in sorted(os.scandir(entry.path), key=lambda e: e.name.lower()):
-                    if (
-                        sub.is_file()
-                        and sub.name.endswith(".py")
-                        and not sub.name.startswith("__")
-                    ):
-                        rows.append((sub.name, "file", sub.path, 1))
-            except OSError:
-                pass
+            rows.append((entry.name + "/", "dir", entry.path, _depth))
+            rows.extend(scan_user_dir(entry.path, _depth + 1))
         elif entry.is_file() and entry.name.endswith(".py"):
-            rows.append((entry.name, "file", entry.path, 0))
+            rows.append((entry.name, "file", entry.path, _depth))
     return rows

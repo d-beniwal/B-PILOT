@@ -208,22 +208,29 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         default_file = config.get("default_plan_file")
         visible = set(config.get("visible_plan_files") or [])
         insert_at = 0
-        pending_dir = None
+        # Stack of (display_name, depth) dir headers not yet shown. A dir at
+        # depth d replaces any stacked entries at depth >= d (those were
+        # sibling/uncle groups with no visible files); a visible file flushes
+        # every remaining ancestor header, in root-to-leaf order, once.
+        pending_stack: list[tuple[str, int]] = []
         for display_name, kind, abs_path, depth in P.scan_user_dir(plans_dir):
+            # Any stacked header at depth >= this entry's depth belongs to a
+            # sibling/uncle group we've now moved past (with no visible files
+            # under it, or it would have been flushed and cleared already).
+            while pending_stack and pending_stack[-1][1] >= depth:
+                pending_stack.pop()
             if kind == "dir":
-                pending_dir = (display_name, kind, abs_path, depth)
+                pending_stack.append((display_name, depth))
                 continue
-            if depth == 0:
-                pending_dir = None  # a top-level file ends any pending dir group
             rel = os.path.relpath(abs_path, plans_dir).replace(os.sep, "/")
             if rel not in visible:
                 continue
-            if pending_dir is not None:
-                lbl = QtWidgets.QLabel(f"📁 {pending_dir[0]}")
+            for header, _ in pending_stack:
+                lbl = QtWidgets.QLabel(f"📁 {header}")
                 lbl.setStyleSheet(f"color: {S.MUTED};")
                 self._fb_layout.insertWidget(insert_at, lbl)
                 insert_at += 1
-                pending_dir = None
+            pending_stack.clear()
             cb = QtWidgets.QCheckBox(display_name)
             if depth:
                 cb.setStyleSheet(f"margin-left: {16 * depth}px;")

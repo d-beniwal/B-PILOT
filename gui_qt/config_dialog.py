@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt5 import QtWidgets
+from PyQt5 import QtCore, QtWidgets
 
 from . import config
 from . import device_discovery as ddisc
@@ -250,14 +250,19 @@ class ConfigDialog(QtWidgets.QDialog):
     def _build_visibility_card(self) -> QtWidgets.QWidget:
         card = S.make_card("Plan visibility  (which files appear in the User files panel)")
 
-        self._visibility_checks: dict[str, QtWidgets.QCheckBox] = {}
+        # Leaf (file) tree items, keyed by plans_dir-relative path.
+        self._visibility_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
         self._visible_files_initial: set[str] = set()
 
         btn_row = QtWidgets.QHBoxLayout()
         select_all_btn = QtWidgets.QPushButton("Select all")
-        select_all_btn.clicked.connect(lambda: self._set_all_checked(self._visibility_checks, True))
+        select_all_btn.clicked.connect(lambda: self._set_all_visibility_checked(True))
         deselect_all_btn = QtWidgets.QPushButton("Deselect all")
-        deselect_all_btn.clicked.connect(lambda: self._set_all_checked(self._visibility_checks, False))
+        deselect_all_btn.clicked.connect(lambda: self._set_all_visibility_checked(False))
+        expand_all_btn = QtWidgets.QPushButton("Expand all")
+        expand_all_btn.clicked.connect(lambda: self._visibility_tree.expandAll())
+        collapse_all_btn = QtWidgets.QPushButton("Collapse all")
+        collapse_all_btn.clicked.connect(lambda: self._visibility_tree.collapseAll())
         refresh_btn = QtWidgets.QPushButton("Refresh list")
         refresh_btn.setToolTip(
             "Re-scan the Plans directory (Paths tab) — picks up files added/"
@@ -266,19 +271,16 @@ class ConfigDialog(QtWidgets.QDialog):
         refresh_btn.clicked.connect(self._rebuild_visibility_list)
         btn_row.addWidget(select_all_btn)
         btn_row.addWidget(deselect_all_btn)
+        btn_row.addWidget(expand_all_btn)
+        btn_row.addWidget(collapse_all_btn)
         btn_row.addStretch(1)
         btn_row.addWidget(refresh_btn)
         card.body.addLayout(btn_row)
 
-        self._visibility_container = QtWidgets.QWidget()
-        self._visibility_layout = QtWidgets.QVBoxLayout(self._visibility_container)
-        self._visibility_layout.setContentsMargins(2, 2, 2, 2)
-        self._visibility_layout.setSpacing(2)
-        vis_scroll = QtWidgets.QScrollArea()
-        vis_scroll.setWidgetResizable(True)
-        vis_scroll.setWidget(self._visibility_container)
-        vis_scroll.setMinimumHeight(S.px(160))
-        card.body.addWidget(vis_scroll)
+        self._visibility_tree = QtWidgets.QTreeWidget()
+        self._visibility_tree.setHeaderHidden(True)
+        self._visibility_tree.setMinimumHeight(S.px(160))
+        card.body.addWidget(self._visibility_tree)
 
         # Re-scan automatically when the Plans directory field is edited.
         self._plans_dir.editingFinished.connect(self._rebuild_visibility_list)
@@ -286,34 +288,61 @@ class ConfigDialog(QtWidgets.QDialog):
         return card
 
     def _rebuild_visibility_list(self) -> None:
-        """Re-scan the (possibly just-edited) Plans directory and rebuild the list.
+        """Re-scan the (possibly just-edited) Plans directory and rebuild the tree.
 
-        Preserves already-toggled checkbox states across a rescan.
+        Preserves already-toggled checkbox states and expand/collapse state
+        (by folder path) across a rescan.
         """
         plans_dir = self._plans_dir.text().strip()
-        old = {rel: cb.isChecked() for rel, cb in self._visibility_checks.items()}
+        old_checked = {
+            rel: item.checkState(0) == QtCore.Qt.Checked
+            for rel, item in self._visibility_items.items()
+        }
+        old_expanded = {
+            item.data(0, QtCore.Qt.UserRole): item.isExpanded()
+            for item in self._all_visibility_dir_items()
+        }
 
-        while self._visibility_layout.count():
-            item = self._visibility_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        self._visibility_checks.clear()
+        self._visibility_tree.clear()
+        self._visibility_items.clear()
 
+        root = self._visibility_tree.invisibleRootItem()
+        parent_by_depth: dict[int, QtWidgets.QTreeWidgetItem] = {-1: root}
         for display_name, kind, abs_path, depth in P.scan_user_dir(plans_dir):
+            parent = parent_by_depth[depth - 1]
             if kind == "dir":
-                lbl = QtWidgets.QLabel(f"📁 {display_name}")
-                lbl.setStyleSheet(f"color: {S.MUTED};")
-                self._visibility_layout.addWidget(lbl)
+                item = QtWidgets.QTreeWidgetItem(parent, [f"📁 {display_name}"])
+                item.setFlags(item.flags() & ~QtCore.Qt.ItemIsUserCheckable)
+                item.setData(0, QtCore.Qt.UserRole, abs_path)
+                item.setExpanded(old_expanded.get(abs_path, True))
+                parent_by_depth[depth] = item
                 continue
             rel = os.path.relpath(abs_path, plans_dir).replace(os.sep, "/")
-            cb = QtWidgets.QCheckBox(display_name)
-            if depth:
-                cb.setStyleSheet(f"margin-left: {S.px(16 * depth)}px;")
-            cb.setChecked(old.get(rel, rel in self._visible_files_initial))
-            self._visibility_checks[rel] = cb
-            self._visibility_layout.addWidget(cb)
-        self._visibility_layout.addStretch(1)
+            item = QtWidgets.QTreeWidgetItem(parent, [display_name])
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(
+                0,
+                QtCore.Qt.Checked
+                if old_checked.get(rel, rel in self._visible_files_initial)
+                else QtCore.Qt.Unchecked,
+            )
+            self._visibility_items[rel] = item
+
+    def _all_visibility_dir_items(self):
+        """Yield every folder QTreeWidgetItem currently in the visibility tree."""
+        stack = [self._visibility_tree.invisibleRootItem()]
+        while stack:
+            node = stack.pop()
+            for i in range(node.childCount()):
+                child = node.child(i)
+                if not (child.flags() & QtCore.Qt.ItemIsUserCheckable):
+                    yield child  # dirs are the only non-checkable items
+                stack.append(child)
+
+    def _set_all_visibility_checked(self, checked: bool) -> None:
+        state = QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked
+        for item in self._visibility_items.values():
+            item.setCheckState(0, state)
 
     @staticmethod
     def _set_all_checked(checks: dict[str, QtWidgets.QCheckBox], checked: bool) -> None:
@@ -654,7 +683,7 @@ class ConfigDialog(QtWidgets.QDialog):
         self._import_root.setText(cfg["import_root"])
         self._default_file.setText(cfg["default_plan_file"])
         self._visible_files_initial = set(cfg.get("visible_plan_files") or [])
-        self._visibility_checks.clear()
+        self._visibility_items.clear()
         self._rebuild_visibility_list()
 
         self._startup.setPlainText(cfg["bluesky_startup"])
@@ -683,7 +712,9 @@ class ConfigDialog(QtWidgets.QDialog):
             "import_root": self._import_root.text().strip(),
             "default_plan_file": self._default_file.text().strip(),
             "visible_plan_files": sorted(
-                rel for rel, cb in self._visibility_checks.items() if cb.isChecked()
+                rel
+                for rel, item in self._visibility_items.items()
+                if item.checkState(0) == QtCore.Qt.Checked
             ),
             "bluesky_startup": self._startup.toPlainText().strip(),
             "keep_kernel_on_exit": self._keep_kernel.isChecked(),
