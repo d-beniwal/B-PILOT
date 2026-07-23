@@ -8,6 +8,7 @@ import sys
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+from . import autopilot_bridge
 from . import config
 from . import device_source
 from . import paths
@@ -62,6 +63,13 @@ class MainWindow(QtWidgets.QMainWindow):
         clay.addWidget(main_split, 1)
 
         self.setCentralWidget(central)
+
+        # Optional AutoPILOT chat dock -- absent entirely if AutoPILOT/ isn't
+        # there or its deps aren't installed (see gui_qt/autopilot_bridge.py).
+        if autopilot_bridge.AVAILABLE:
+            self.autopilot_chat = autopilot_bridge.ChatDockWidget(self)
+            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.autopilot_chat)
+
         self._build_menu()
         self._apply_launch_mode()   # show/hide script params + set control states
         self.statusBar().showMessage(

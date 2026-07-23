@@ -71,6 +71,10 @@ dependencies:
       - bluesky-tiled-plugins==2.0.8
       - area-detector-handlers==0.0.10
       - tiled==0.2.14
+
+      # --- AutoPILOT chat dock (optional; gui_qt/autopilot_bridge.py degrades
+      # --- gracefully if this isn't installed) ------------------------------
+      - anthropic==0.118.0
       - event-model==1.24.0
       - intake==0.6.4
       - caproto==1.3.0

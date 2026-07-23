@@ -10,3 +10,8 @@ gui_config.json
 # default_config.json on first use — should not carry machine-specific state
 # between checkouts.
 profiles/*/active_config.json
+
+# AutoPILOT is a separate, independently-versioned git repo nested here (same
+# convention as B-PILOT itself being a nested repo inside the non-git
+# mpe_bluesky tree). B-PILOT must never depend on or track it.
+AutoPILOT/
