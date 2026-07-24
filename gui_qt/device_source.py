@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 
+from . import axis_discovery as _axes
 from . import config as _config
 from . import device_discovery as _discovery
 from . import paths as _paths
@@ -31,8 +32,19 @@ class DeviceCatalog:
     the GUI only calls :meth:`names_for` / :meth:`has`.
     """
 
-    def __init__(self, beamline: str, categories: dict[str, list[str]]) -> None:
-        """Store `categories` ({category: [names]}) for `beamline`, deduped."""
+    def __init__(
+        self,
+        beamline: str,
+        categories: dict[str, list[str]],
+        axes: dict[str, list[str]] | None = None,
+    ) -> None:
+        """Store `categories` ({category: [names]}) for `beamline`, deduped.
+
+        `axes` ({device_name: [axis, ...]}) carries each multi-axis motor
+        device's scannable axes (see :mod:`axis_discovery`); devices absent from
+        it (or mapping to []) are treated as single settable objects with no
+        axis to pick.
+        """
         self.beamline = beamline
         self._by_cat: dict[str, list[str]] = {}
         for cat, names in categories.items():
@@ -41,6 +53,9 @@ class DeviceCatalog:
                 if n and n not in deduped:
                     deduped.append(n)
             self._by_cat[cat] = deduped
+        self._axes: dict[str, list[str]] = {
+            name: list(axs) for name, axs in (axes or {}).items() if axs
+        }
 
     def categories(self) -> list[str]:
         """Category names available for this beamline."""
@@ -64,6 +79,15 @@ class DeviceCatalog:
     def has(self, name: str, category: str | None = None) -> bool:
         """True if `name` is a known device (optionally within `category`)."""
         return name in self.names_for(category)
+
+    def axes_for(self, name: str) -> list[str]:
+        """Scannable axis names for motor device `name` (empty if it has none).
+
+        An empty list means the device is itself settable (e.g. a bare
+        ``EpicsMotor``) or its axes couldn't be discovered -- callers then use
+        the bare device name rather than ``device.axis``.
+        """
+        return list(self._axes.get(name, []))
 
     def is_empty(self) -> bool:
         """True if this beamline exposes no devices (e.g. no search paths set)."""
@@ -126,6 +150,9 @@ def get_catalog(beamline: str | None = None, *, search_paths: list[str] | None =
                 continue
             by_cat.setdefault(category, []).append(device.name)
 
-    catalog = DeviceCatalog(bl, by_cat)
+    # Axes are a structural property of the same source files -- live-rescanned
+    # here (never persisted) so they can't drift from the device list.
+    axes = _axes.scan(resolved_paths)
+    catalog = DeviceCatalog(bl, by_cat, axes)
     _cache[key] = catalog
     return catalog

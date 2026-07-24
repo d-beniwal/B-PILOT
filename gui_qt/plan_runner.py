@@ -31,6 +31,8 @@ from . import style as S
 from .plan_parser import _NODEFAULT
 from .plan_parser import ParamSpec
 from .plan_parser import RawCode
+from .skeleton_widgets import MotorAxisListWidget
+from .skeleton_widgets import MotorAxisPicker
 from .skeleton_widgets import MotorRowsWidget
 
 # Plan name inside an ``RE(<plan>(...))`` command — mirrors queue_store._RE_PLAN,
@@ -367,7 +369,28 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     def _apply_param_value(self, name: str, value_node: ast.expr) -> None:
         """Set `self._param_widgets[name]`'s widget from a parsed argument value."""
         spec, widget = self._param_widgets[name]
-        if spec.dtype == "device":
+        if spec.dtype == "device" and spec.category == "motor":
+            # `motor.axis` (ast.Attribute) — or a bare motor (ast.Name) for an
+            # axis-less device / a hand-edited command.
+            if isinstance(value_node, ast.Attribute) and isinstance(
+                value_node.value, ast.Name
+            ):
+                widget.set_from(value_node.value.id, value_node.attr)
+            elif isinstance(value_node, ast.Name):
+                widget.set_from(value_node.id, None)
+            else:
+                raise ValueError("expected a motor.axis reference")
+        elif spec.dtype == "device_list" and spec.category == "motor":
+            if not isinstance(value_node, (ast.List, ast.Tuple)):
+                raise ValueError("expected a motor list")
+            pairs: list[tuple[str, str | None]] = []
+            for elt in value_node.elts:
+                if isinstance(elt, ast.Attribute) and isinstance(elt.value, ast.Name):
+                    pairs.append((elt.value.id, elt.attr))
+                elif isinstance(elt, ast.Name):
+                    pairs.append((elt.id, None))
+            widget.set_from_pairs(pairs)
+        elif spec.dtype == "device":
             if not isinstance(value_node, ast.Name):
                 raise ValueError("expected a bare device reference")
             idx = widget.findText(value_node.id)
@@ -554,6 +577,15 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 if spec.default is not None and str(spec.default) in opts:
                     widget.setCurrentText(str(spec.default))
                 widget.currentTextChanged.connect(self._live_validate)
+            elif spec.dtype == "device" and spec.category == "motor":
+                # A motor is a multi-axis device -> pick motor + axis; the
+                # generated token is `motor.axis` (see MotorAxisPicker).
+                widget = MotorAxisPicker(
+                    allow_blank=spec.blank_omits or not spec.required
+                )
+                if spec.default not in (None, _NODEFAULT):
+                    widget.set_from(str(spec.default), None)
+                widget.changed.connect(self._live_validate)
             elif spec.dtype == "device":
                 # One device object -> dropdown of names for this category.
                 widget = S.NoScrollComboBox()
@@ -566,6 +598,11 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 if spec.default not in (None, _NODEFAULT) and str(spec.default) in names:
                     widget.setCurrentText(str(spec.default))
                 widget.currentTextChanged.connect(self._live_validate)
+            elif spec.dtype == "device_list" and spec.category == "motor":
+                # List of motor axes -> a repeatable motor+axis picker per item
+                # (a flat multi-select can't attach a per-item axis choice).
+                widget = MotorAxisListWidget()
+                widget.changed.connect(self._live_validate)
             elif spec.dtype == "device_list":
                 # List of device objects -> multi-select of names for the category.
                 widget = QtWidgets.QListWidget()
@@ -676,8 +713,19 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             if not widget.currentText().strip() and spec.required:
                 return f"{short}: required"
             return None
+        if spec.dtype == "device" and spec.category == "motor":
+            if not widget.motor():
+                return f"{short}: required" if spec.required else None
+            return widget.error()  # motor chosen -> may still need an axis
         if spec.dtype == "device":
             if not widget.currentText().strip() and spec.required:
+                return f"{short}: required"
+            return None
+        if spec.dtype == "device_list" and spec.category == "motor":
+            errs = widget.errors()
+            if errs:
+                return "; ".join(errs)
+            if not widget.tokens() and spec.required:
                 return f"{short}: required"
             return None
         if spec.dtype == "device_list":
@@ -731,8 +779,13 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             for spec in self._current_params:
                 widget = self._param_widgets[spec.name][1]
                 err = self._field_error(spec, widget)
+                if isinstance(widget, MotorAxisPicker):
+                    # Flag the specific combo: motor if unchosen, else axis.
+                    bad = err is not None
+                    S.mark_invalid(widget.motor_cb, bad and not widget.motor())
+                    S.mark_invalid(widget.axis_cb, bad and bool(widget.motor()))
                 # bool / device_list have no single-border widget to flag
-                if spec.dtype not in ("bool", "device_list"):
+                elif spec.dtype not in ("bool", "device_list"):
                     S.mark_invalid(widget, err is not None)
                 if err:
                     errors.append(err)
@@ -818,6 +871,18 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                     values[spec.name] = val
                 elif spec.default not in (None, _NODEFAULT):
                     values[spec.name] = spec.default
+            elif spec.dtype == "device" and spec.category == "motor":
+                # Motor -> `motor.axis` (RawCode, emitted unquoted).
+                if not widget.motor():
+                    if spec.required:
+                        errors.append(f"{short}: required")
+                    # else: blank -> omit the arg (plan uses its default)
+                else:
+                    err = widget.error()  # e.g. axis still needed
+                    if err:
+                        errors.append(f"{short}: {err}")
+                    else:
+                        values[spec.name] = RawCode(widget.token())
             elif spec.dtype == "device":
                 # RawCode -> emitted unquoted (a real object, not a string).
                 val = widget.currentText().strip()
@@ -826,6 +891,17 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 elif spec.required:
                     errors.append(f"{short}: required")
                 # else: blank -> omit the arg (plan uses its default device)
+            elif spec.dtype == "device_list" and spec.category == "motor":
+                # List of `motor.axis` refs (RawCode, emitted unquoted).
+                row_errors = widget.errors()
+                for err in row_errors:
+                    errors.append(f"{short}: {err}")
+                tokens = widget.tokens()
+                if tokens and not row_errors:
+                    values[spec.name] = RawCode("[" + ", ".join(tokens) + "]")
+                elif not tokens and spec.required:
+                    errors.append(f"{short}: required")
+                # else: empty -> omit the arg (plan uses its default, e.g. [])
             elif spec.dtype == "device_list":
                 names = [it.text() for it in widget.selectedItems()]
                 if names:

@@ -41,6 +41,210 @@ def _float_field(placeholder: str, on_change) -> QtWidgets.QLineEdit:
     return field
 
 
+class MotorAxisPicker(QtWidgets.QWidget):
+    """Motor combo + dependent axis combo -> a ``motor.axis`` source token.
+
+    A "motor" is a multi-axis device whose scannable objects are sub-components
+    (``lens1E.x``, ``lens1E.y``, ...); see :mod:`axis_discovery`.  Selecting a
+    motor repopulates the axis combo from
+    ``device_source.get_catalog().axes_for(motor)``:
+
+    * **0 axes** -> axis combo hidden; :meth:`token` returns the bare motor name
+      (a directly-settable device such as a plain ``EpicsMotor``).
+    * **1 axis**  -> auto-selected, combo shown so ``nfE.x`` is visible.
+    * **N axes**  -> a leading blank forces a conscious choice; :meth:`error`
+      flags the field until the user picks one (a silent default axis would
+      quietly scan the wrong stage).
+
+    Reused by :class:`_MotorRow` (scan_skeletons rows), the plan-runner's
+    ``device{motor}`` field, and (via :class:`MotorAxisListWidget`) its
+    ``device_list{motor}`` field, so every place a motor is chosen behaves the
+    same way.
+    """
+
+    changed = QtCore.pyqtSignal()
+
+    def __init__(self, allow_blank: bool = True, parent=None) -> None:
+        super().__init__(parent)
+        self._has_axes = False  # tracked explicitly (widget.isVisible() is
+        # False until the picker is actually shown, which breaks off-screen use)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(S.px(4))
+
+        self.motor_cb = S.NoScrollComboBox()
+        if allow_blank:
+            self.motor_cb.addItem("")  # blank = not yet chosen
+        self.motor_cb.addItems(device_source.get_catalog().names_for("motor"))
+        self.motor_cb.currentTextChanged.connect(self._on_motor_changed)
+        layout.addWidget(self.motor_cb, 2)
+
+        self.axis_cb = S.NoScrollComboBox()
+        self.axis_cb.setToolTip("Axis of the selected motor to scan.")
+        self.axis_cb.currentTextChanged.connect(self.changed)
+        layout.addWidget(self.axis_cb, 1)
+
+        self._reload_axes()
+
+    def _on_motor_changed(self, *_) -> None:
+        self._reload_axes()
+        self.changed.emit()
+
+    def _reload_axes(self) -> None:
+        motor = self.motor_cb.currentText().strip()
+        axes = device_source.get_catalog().axes_for(motor) if motor else []
+        self.axis_cb.blockSignals(True)
+        self.axis_cb.clear()
+        if len(axes) > 1:
+            self.axis_cb.addItem("")  # force a conscious pick when ambiguous
+        self.axis_cb.addItems(axes)
+        self.axis_cb.blockSignals(False)
+        self._has_axes = bool(axes)
+        self.axis_cb.setVisible(self._has_axes)  # hidden when device has no axes
+
+    # -- public API --
+    def motor(self) -> str:
+        return self.motor_cb.currentText().strip()
+
+    def axis(self) -> str:
+        return self.axis_cb.currentText().strip() if self.has_axes() else ""
+
+    def has_axes(self) -> bool:
+        return self._has_axes
+
+    def token(self) -> str:
+        """``motor.axis`` (or bare ``motor`` when it has no axes); '' if unset."""
+        motor = self.motor()
+        if not motor:
+            return ""
+        axis = self.axis()
+        return f"{motor}.{axis}" if axis else motor
+
+    def error(self) -> str | None:
+        """Human-readable error, or None when a usable token can be produced."""
+        motor = self.motor()
+        if not motor:
+            return "select a motor"
+        if self.has_axes() and not self.axis():
+            return f"{motor}: select an axis"
+        return None
+
+    def set_from(self, motor: str, axis: str | None) -> None:
+        """Best-effort inverse of :meth:`token` -- select `motor` then `axis`.
+
+        Unknown motor/axis names (e.g. from a command built under a different
+        device selection, or hand-edited) are added so the restored value stays
+        visible and selected rather than silently dropped.
+        """
+        motor = (motor or "").strip()
+        idx = self.motor_cb.findText(motor)
+        if idx < 0 and motor:
+            self.motor_cb.addItem(motor)
+            idx = self.motor_cb.count() - 1
+        if idx >= 0:
+            self.motor_cb.setCurrentIndex(idx)
+        # Reload unconditionally: setCurrentIndex to the *same* motor fires no
+        # signal, which would otherwise leave a stale axis from a prior value
+        # (a bare motor loaded over an existing `motor.axis` selection). A fresh
+        # populate leaves the axis blank (multi-axis) or auto-selected (single).
+        self._reload_axes()
+        axis = (axis or "").strip()
+        if axis:
+            aidx = self.axis_cb.findText(axis)
+            if aidx < 0:
+                self.axis_cb.addItem(axis)
+                self._has_axes = True
+                self.axis_cb.setVisible(True)
+                aidx = self.axis_cb.count() - 1
+            self.axis_cb.setCurrentIndex(aidx)
+
+
+class MotorAxisListWidget(QtWidgets.QWidget):
+    """Repeatable list of :class:`MotorAxisPicker` rows for ``device_list{motor}``.
+
+    A plain multi-select list can't attach a per-item axis choice, so each
+    selected motor gets its own row (motor + axis + Remove), mirroring
+    :class:`MotorRowsWidget`.  :meth:`tokens` yields one ``motor.axis`` fragment
+    per filled row.
+    """
+
+    changed = QtCore.pyqtSignal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._rows: list[tuple[MotorAxisPicker, QtWidgets.QWidget]] = []
+
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(S.px(4))
+        self._rows_layout = QtWidgets.QVBoxLayout()
+        self._rows_layout.setSpacing(S.px(4))
+        outer.addLayout(self._rows_layout)
+
+        add_btn = QtWidgets.QPushButton("+ Add motor")
+        add_btn.clicked.connect(lambda: self.add_row())
+        wrap = QtWidgets.QHBoxLayout()
+        wrap.addWidget(add_btn)
+        wrap.addStretch(1)
+        outer.addLayout(wrap)
+
+        self.add_row()
+
+    def add_row(self, motor: str = "", axis: str | None = None) -> None:
+        row = QtWidgets.QWidget()
+        rl = QtWidgets.QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(S.px(6))
+        picker = MotorAxisPicker(allow_blank=True)
+        picker.changed.connect(self.changed)
+        rl.addWidget(picker, 1)
+        remove_btn = QtWidgets.QToolButton()
+        remove_btn.setText("✕")
+        remove_btn.setToolTip("Remove this motor")
+        remove_btn.clicked.connect(lambda: self._remove_row(row))
+        rl.addWidget(remove_btn)
+        if motor:
+            picker.set_from(motor, axis)
+        self._rows.append((picker, row))
+        self._rows_layout.addWidget(row)
+        self.changed.emit()
+
+    def _remove_row(self, row: QtWidgets.QWidget) -> None:
+        for i, (_picker, widget) in enumerate(self._rows):
+            if widget is row:
+                self._rows.pop(i)
+                self._rows_layout.removeWidget(widget)
+                widget.deleteLater()
+                self.changed.emit()
+                return
+
+    def tokens(self) -> list[str]:
+        """One ``motor.axis`` fragment per filled row (blank rows omitted)."""
+        return [p.token() for p, _ in self._rows if p.token()]
+
+    def errors(self) -> list[str]:
+        """Errors for rows the user started filling (a wholly blank row is fine)."""
+        errs: list[str] = []
+        for picker, _ in self._rows:
+            if picker.motor():
+                err = picker.error()
+                if err:
+                    errs.append(err)
+        return errs
+
+    def set_from_pairs(self, pairs: list[tuple[str, str | None]]) -> None:
+        """Replace all rows with `pairs` ((motor, axis) each); one blank if empty."""
+        while self._rows:
+            _picker, widget = self._rows.pop()
+            self._rows_layout.removeWidget(widget)
+            widget.deleteLater()
+        if not pairs:
+            self.add_row()
+            return
+        for motor, axis in pairs:
+            self.add_row(motor, axis)
+
+
 class _MotorRow(QtWidgets.QWidget):
     """One motor + its position/step fields, plus a Remove button."""
 
@@ -56,11 +260,9 @@ class _MotorRow(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(S.px(6))
 
-        self.motor_cb = S.NoScrollComboBox()
-        self.motor_cb.addItem("")  # blank = not yet chosen
-        self.motor_cb.addItems(device_source.get_catalog().names_for("motor"))
-        self.motor_cb.currentTextChanged.connect(self.changed)
-        layout.addWidget(self.motor_cb, 1)
+        self.picker = MotorAxisPicker(allow_blank=True)
+        self.picker.changed.connect(self.changed)
+        layout.addWidget(self.picker, 2)
 
         if shape in _LIST_SHAPES:
             self.positions = QtWidgets.QLineEdit()
@@ -93,9 +295,10 @@ class _MotorRow(QtWidgets.QWidget):
 
     def error(self) -> str | None:
         """Human-readable error, or None if this row is valid."""
-        motor = self.motor_cb.currentText().strip()
-        if not motor:
-            return "select a motor"
+        picker_err = self.picker.error()
+        if picker_err is not None:
+            return picker_err
+        motor = self.picker.motor()
         if self.shape in _LIST_SHAPES:
             raw = self.positions.text().strip()
             if not raw:
@@ -132,8 +335,7 @@ class _MotorRow(QtWidgets.QWidget):
 
     def tokens(self) -> list[str]:
         """This row's contribution to the flat *args token list (call only when valid)."""
-        motor = self.motor_cb.currentText().strip()
-        out = [motor]
+        out = [self.picker.token()]  # "motor.axis" (or bare motor if no axes)
         if self.shape in _LIST_SHAPES:
             raw = self.positions.text().strip()
             parts = [p.strip() for p in raw.split(",") if p.strip()]
@@ -149,16 +351,17 @@ class _MotorRow(QtWidgets.QWidget):
         """Best-effort inverse of :meth:`tokens` — populate this row from source tokens."""
         if not tokens:
             return
-        motor = tokens[0].strip()
-        if motor:
-            idx = self.motor_cb.findText(motor)
-            if idx < 0:
-                # Not in the currently-discovered motor list (e.g. loaded from a
-                # queue item built under a different device selection) — add it
-                # so the restored value is still visible/selected.
-                self.motor_cb.addItem(motor)
-                idx = self.motor_cb.count() - 1
-            self.motor_cb.setCurrentIndex(idx)
+        head = tokens[0].strip()
+        if head:
+            # token[0] is "motor.axis" (or a bare "motor" for an axis-less
+            # device) — split on the LAST dot so multi-dot attribute paths still
+            # keep the trailing axis. MotorAxisPicker.set_from re-adds any
+            # motor/axis not in the current discovery (see its docstring).
+            motor_part, dot, axis_part = head.rpartition(".")
+            if dot:
+                self.picker.set_from(motor_part, axis_part)
+            else:
+                self.picker.set_from(axis_part, None)
         if self.shape in _LIST_SHAPES:
             if len(tokens) > 1:
                 raw = tokens[1].strip()
