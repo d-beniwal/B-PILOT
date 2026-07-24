@@ -1,6 +1,7 @@
 """Configuration dialog: a profile bar on top, tabbed pages below.
 
-Tabs: Paths, Plans, Launch Session, Devices, Appearance — one page each,
+Tabs: Paths, Plans, Launch Session, Devices, Scan blocks, Data Viewer,
+Appearance — one page each,
 selected via a left-hand list (`QListWidget` + `QStackedWidget`). A profile
 bar above the tabs lets you switch which on-disk profile
 (`B-PILOT/profiles/<name>/{default_config.json,active_config.json}`) you're
@@ -24,12 +25,98 @@ import os
 
 from PyQt5 import QtCore, QtWidgets
 
+from . import autopilot_bridge
 from . import config
 from . import device_discovery as ddisc
 from . import device_source
 from . import paths as _paths
 from . import plan_parser as P
+from . import scan_building_discovery as sdisc
 from . import style as S
+
+
+class _CategoryDropdowns(QtWidgets.QWidget):
+    """One-or-more category dropdowns for a single device row.
+
+    Each dropdown is an editable `QComboBox` pre-populated with every
+    category currently known across the profile (still free-text, so a
+    brand-new category can be typed in) — replaces the old single
+    comma-separated text field with an explicit widget per assigned
+    category, plus a "+" to add another when a device should appear under
+    more than one. `on_change` fires with the resulting ordered list of
+    non-blank category strings whenever a dropdown's value is committed
+    (item picked, or Enter/blur after typing) or a row is added/removed.
+    """
+
+    def __init__(self, categories, all_categories, on_change, parent=None) -> None:
+        super().__init__(parent)
+        self._all_categories = all_categories
+        self._on_change = on_change
+        self._rows: list[tuple[QtWidgets.QComboBox, QtWidgets.QToolButton]] = []
+
+        self._lay = QtWidgets.QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(4)
+
+        for cat in (categories or [""]):
+            self._add_row(cat)
+        # Baseline for _emit()'s change check — see its docstring for why this
+        # matters: without it, every focus-out (e.g. clicking a *different*
+        # dropdown) would look like a change and trigger a rebuild.
+        self._last_emitted = self._current_cats()
+
+        self._add_btn = QtWidgets.QToolButton()
+        self._add_btn.setText("+")
+        self._add_btn.setToolTip("Add another category for this device")
+        self._add_btn.clicked.connect(lambda: self._add_row(""))
+        self._lay.addWidget(self._add_btn)
+
+    def _add_row(self, value: str) -> None:
+        combo = S.NoScrollComboBox()
+        combo.setEditable(True)
+        combo.setMinimumWidth(S.px(130))
+        combo.addItems(self._all_categories)
+        combo.setCurrentText(value)
+        combo.activated.connect(lambda _i: self._emit())
+        combo.lineEdit().editingFinished.connect(self._emit)
+
+        remove_btn = QtWidgets.QToolButton()
+        remove_btn.setText("×")
+        remove_btn.setToolTip("Remove this category")
+        remove_btn.clicked.connect(lambda: self._remove_row(combo, remove_btn))
+
+        # Insert before the "+" button once it exists; append during __init__.
+        insert_at = self._lay.indexOf(self._add_btn) if hasattr(self, "_add_btn") else self._lay.count()
+        self._lay.insertWidget(insert_at, combo)
+        self._lay.insertWidget(insert_at + 1, remove_btn)
+        self._rows.append((combo, remove_btn))
+
+    def _remove_row(self, combo: QtWidgets.QComboBox, btn: QtWidgets.QToolButton) -> None:
+        if len(self._rows) <= 1:
+            return  # always keep at least one dropdown (blank = auto-detected)
+        self._rows = [(c, b) for c, b in self._rows if c is not combo]
+        combo.deleteLater()
+        btn.deleteLater()
+        self._emit()
+
+    def _current_cats(self) -> list[str]:
+        return [c for c in (combo.currentText().strip() for combo, _ in self._rows) if c]
+
+    def _emit(self) -> None:
+        """Fire `on_change` only when the category list actually changed.
+
+        `editingFinished` fires on *any* focus-out of an editable combo's
+        line edit, not just when its text changed — so merely clicking a
+        different dropdown (e.g. to open its popup) would otherwise look
+        like a commit here and trigger a full device-list rebuild via
+        `on_change`. That rebuild, landing mid-click on the next combo,
+        is what made every dropdown's popup collapse the instant it opened.
+        """
+        cats = self._current_cats()
+        if cats == self._last_emitted:
+            return
+        self._last_emitted = cats
+        self._on_change(cats)
 
 
 class ConfigDialog(QtWidgets.QDialog):
@@ -64,8 +151,11 @@ class ConfigDialog(QtWidgets.QDialog):
             ("Plans", self._page(self._build_visibility_card())),
             ("Launch Session", self._page(self._build_launch_card(), self._build_session_card())),
             ("Devices", self._page(self._build_devices_card())),
+            ("Scan blocks", self._page(self._build_scan_blocks_card())),
             ("Data Viewer", self._page(self._build_data_viewer_card())),
-            ("Appearance", self._page(self._build_appearance_card())),
+            ("Appearance", self._page(
+                self._build_appearance_card(), self._build_autopilot_card()
+            )),
         ]
         for title, page in pages:
             self._tab_list.addItem(title)
@@ -484,9 +574,11 @@ class ConfigDialog(QtWidgets.QDialog):
         # category -> name -> checkbox; mirrors the on-disk device_selection shape.
         self._device_checks: dict[str, dict[str, QtWidgets.QCheckBox]] = {}
         self._device_selection_initial: dict[str, dict[str, bool]] = {}
-        # {device_name: category} — manual per-profile override of the category
-        # device_discovery infers; see the Devices card's per-device combo below.
-        self._device_category_overrides: dict[str, str] = {}
+        # {device_name: [category, ...]} — manual per-profile override of the
+        # categor(y/ies) device_discovery infers; lets a device appear as an
+        # option in more than one plan-parameter field. See the Devices card's
+        # per-device category field below.
+        self._device_category_overrides: dict[str, list[str]] = {}
         # {device_name: discovered_category} — recomputed on every rescan, used
         # to know what "(auto)" resolves to and when an override is redundant.
         self._device_raw_category: dict[str, str] = {}
@@ -521,24 +613,25 @@ class ConfigDialog(QtWidgets.QDialog):
     def _rebuild_device_list(self) -> None:
         """Re-scan the search paths and rebuild the checkbox list, grouped by category.
 
-        Discovery's inferred category is never changed by this — a per-device
-        combo lets the user move a device to a different category for THIS
-        profile only (`self._device_category_overrides`), applied on top of
-        the discovered category before grouping.
+        Discovery's inferred category is never changed by this — per-device
+        category dropdowns let the user assign one or more categories for
+        THIS profile only (`self._device_category_overrides`), applied on top of
+        the discovered category before grouping. A device with more than one
+        category gets one row (with its own independent shown/hidden
+        checkbox) per category group it belongs to.
 
-        Preserves already-toggled checkbox states across a rescan (keyed by
-        device name only, so moving a device to a new category doesn't lose
-        its state); a name never seen before defaults to checked (shown) —
+        Preserves already-toggled checkbox states across a rescan, keyed by
+        (category, name) — NOT name alone, since a multi-category device has
+        independent checked state per category group it appears in; a
+        (category, name) never seen before defaults to checked (shown) —
         "everything found is shown by default."
         """
         raw_paths = [
             self._device_paths_widget.item(i).text() for i in range(self._device_paths_widget.count())
         ]
-        # Flat by name (not by category) — a device recategorized during this
-        # session must keep its checked state when it lands in a new group.
-        old_checked: dict[str, bool] = {
-            name: cb.isChecked()
-            for names in self._device_checks.values()
+        old_checked: dict[tuple[str, str], bool] = {
+            (cat, name): cb.isChecked()
+            for cat, names in self._device_checks.items()
             for name, cb in names.items()
         }
         resolved = [device_source.resolve_path(p) for p in raw_paths]
@@ -555,11 +648,13 @@ class ConfigDialog(QtWidgets.QDialog):
         by_category: dict[str, list] = {}
         for device in discovered:
             self._device_raw_category[device.name] = device.category
-            category = self._device_category_overrides.get(device.name, device.category)
-            by_category.setdefault(category, []).append(device)
-        all_categories = sorted(
-            set(by_category) | set(self._device_category_overrides.values()) | {"other"}
-        )
+            categories = self._device_category_overrides.get(device.name) or [device.category]
+            for category in categories:
+                by_category.setdefault(category, []).append(device)
+
+        # Every category currently in use anywhere in this profile — offered
+        # as dropdown options (still editable, so a brand-new one can be typed).
+        all_categories = sorted(by_category)
 
         for category in sorted(by_category):
             hdr = QtWidgets.QLabel(category)
@@ -569,20 +664,20 @@ class ConfigDialog(QtWidgets.QDialog):
             for device in sorted(by_category[category], key=lambda d: d.name.lower()):
                 cb = QtWidgets.QCheckBox(device.name)
                 cb.setToolTip(device.source_file)
-                checked = old_checked.get(device.name)
+                checked = old_checked.get((category, device.name))
                 if checked is None:
                     checked = self._initial_device_checked(category, device.name)
                 cb.setChecked(checked)
                 self._device_checks[category][device.name] = cb
 
-                combo = self._make_category_combo(device.name, device.category, all_categories)
+                field = self._make_category_field(device.name, device.category, all_categories)
 
                 row = QtWidgets.QWidget()
                 row_lay = QtWidgets.QHBoxLayout(row)
                 row_lay.setContentsMargins(0, 0, 0, 0)
                 row_lay.setSpacing(6)
                 row_lay.addWidget(cb)
-                row_lay.addWidget(combo)
+                row_lay.addWidget(field)
                 row_lay.addStretch(1)
                 self._device_layout.addWidget(row)
         self._device_layout.addStretch(1)
@@ -600,60 +695,276 @@ class ConfigDialog(QtWidgets.QDialog):
                 return cat_sel[name]
         return True
 
-    def _make_category_combo(
+    def _make_category_field(
         self, name: str, raw_category: str, all_categories: list[str]
-    ) -> QtWidgets.QComboBox:
-        """Editable dropdown to move `name` into a different category (this
-        profile only) — discovery's own inference is never changed."""
-        combo = S.NoScrollComboBox()
-        combo.setEditable(True)
-        combo.setMinimumWidth(S.px(130))
-        combo.setToolTip(
-            "Move this device to a different category (saved with this profile "
-            "only). Discovery's own filename/class-based inference is unaffected "
-            "— pick '(auto: ...)' to clear the override."
-        )
-        combo.addItem(f"(auto: {raw_category})", None)
-        for cat in all_categories:
-            if cat != raw_category:
-                combo.addItem(cat, cat)
-
+    ) -> _CategoryDropdowns:
+        """One-or-more category dropdowns for `name` (this profile only) —
+        discovery's own inference is never changed. Assigning more than one
+        category lets a device appear as an option in more than one
+        plan-parameter field. Rendered once per category group `name`
+        currently belongs to; editing any copy updates the same override."""
         override = self._device_category_overrides.get(name)
-        if override and override != raw_category:
-            idx = combo.findData(override)
-            if idx < 0:
-                combo.addItem(override, override)
-                idx = combo.count() - 1
-            combo.setCurrentIndex(idx)
-        else:
-            combo.setCurrentIndex(0)
-
-        # `activated` fires when an item is picked from the popup (by click or
-        # keyboard+Enter). For typed-then-Enter text, use the line edit's
-        # `returnPressed` — NOT `editingFinished`: on an editable combo,
-        # opening the popup itself shifts focus off the internal line edit,
-        # which fires `editingFinished` immediately: the handler's
-        # `_rebuild_device_list()` then tears down (and rebuilds) this very
-        # combo mid-popup, snapping it shut before a selection can be made.
-        combo.activated.connect(lambda _i, n=name, c=combo: self._apply_device_category(n, c))
-        combo.lineEdit().returnPressed.connect(
-            lambda n=name, c=combo: self._apply_device_category(n, c)
+        field = _CategoryDropdowns(
+            override or [raw_category],
+            all_categories,
+            lambda cats, n=name: self._apply_device_categories(n, cats),
         )
-        return combo
+        field.setToolTip(
+            "Category/categories this device should appear under — add more "
+            "with '+' to let it show up as an option in more than one "
+            f"plan-parameter field. Auto-detected category: {raw_category}."
+        )
+        return field
 
-    def _apply_device_category(self, name: str, combo: QtWidgets.QComboBox) -> None:
-        text = combo.currentText().strip()
+    def _apply_device_categories(self, name: str, cats: list[str]) -> None:
         raw = self._device_raw_category.get(name)
-        if not text or text.startswith("(auto") or text == raw:
+        if not cats or cats == [raw]:
             self._device_category_overrides.pop(name, None)
         else:
-            self._device_category_overrides[name] = text
-        self._rebuild_device_list()
+            self._device_category_overrides[name] = cats
+        # Deferred: this is called from inside the very combo box's own
+        # activated/editingFinished signal handler. Rebuilding synchronously
+        # tears down that combo's widget hierarchy mid-signal, which made the
+        # dropdown appear to close itself instead of registering the pick.
+        QtCore.QTimer.singleShot(0, self._rebuild_device_list)
 
     def _set_all_device_checked(self, checked: bool) -> None:
         for names in self._device_checks.values():
             for cb in names.values():
                 cb.setChecked(checked)
+
+    # ── Scan blocks (scan_skeletons.py plan_opener/per_step/plan_closer/suspenders) ─
+
+    _SCAN_BLOCK_LABELS = {
+        "plan_opener": "Plan openers",
+        "per_step": "Per-steps",
+        "plan_closer": "Plan closers",
+        "suspender": "Suspenders",
+        "pseudo_suspender": "Pseudo-suspenders",
+    }
+
+    # One accent colour per category, used for the card's left bar, header text,
+    # and count badge so the five groups are told apart at a glance.
+    _SCAN_BLOCK_COLORS = {
+        "plan_opener": "#2e7d32",       # green
+        "per_step": "#1565c0",          # blue
+        "plan_closer": "#c85e00",       # accent orange (dark)
+        "suspender": "#6a1b9a",         # purple
+        "pseudo_suspender": "#8d6e00",  # mustard
+    }
+
+    # Number of name "chips" laid out per row inside each category card.
+    _SCAN_BLOCK_COLUMNS = 3
+
+    def _build_scan_blocks_card(self) -> QtWidgets.QWidget:
+        card = S.make_card(
+            "Scan building blocks  (plan_opener / per_step / plan_closer / suspenders)"
+        )
+        card.body.addWidget(
+            QtWidgets.QLabel(
+                "Files scanned for scan_skeletons.py's plan_opener/per_step/"
+                "plan_closer names (never imported — only their __all__ list "
+                "is read):"
+            )
+        )
+        stub_row = QtWidgets.QHBoxLayout()
+        self._plan_building_paths_widget = QtWidgets.QListWidget()
+        self._plan_building_paths_widget.setFixedHeight(S.px(50))
+        stub_row.addWidget(self._plan_building_paths_widget, 1)
+        stub_btns = QtWidgets.QVBoxLayout()
+        add_stub_btn = QtWidgets.QPushButton("Add…")
+        add_stub_btn.clicked.connect(self._add_plan_building_path)
+        remove_stub_btn = QtWidgets.QPushButton("Remove")
+        remove_stub_btn.clicked.connect(self._remove_plan_building_path)
+        stub_btns.addWidget(add_stub_btn)
+        stub_btns.addWidget(remove_stub_btn)
+        stub_btns.addStretch(1)
+        stub_row.addLayout(stub_btns)
+        card.body.addLayout(stub_row)
+
+        card.body.addWidget(
+            QtWidgets.QLabel(
+                "Files scanned for suspender/pseudo_suspender names (common "
+                "files plus this beamline's own <bl>_suspenders.py):"
+            )
+        )
+        susp_row = QtWidgets.QHBoxLayout()
+        self._suspender_paths_widget = QtWidgets.QListWidget()
+        self._suspender_paths_widget.setFixedHeight(S.px(50))
+        susp_row.addWidget(self._suspender_paths_widget, 1)
+        susp_btns = QtWidgets.QVBoxLayout()
+        add_susp_btn = QtWidgets.QPushButton("Add…")
+        add_susp_btn.clicked.connect(self._add_suspender_path)
+        remove_susp_btn = QtWidgets.QPushButton("Remove")
+        remove_susp_btn.clicked.connect(self._remove_suspender_path)
+        susp_btns.addWidget(add_susp_btn)
+        susp_btns.addWidget(remove_susp_btn)
+        susp_btns.addStretch(1)
+        susp_row.addLayout(susp_btns)
+        card.body.addLayout(susp_row)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        discover_btn = QtWidgets.QPushButton("Discover")
+        discover_btn.setToolTip(
+            "Re-scan the search paths above for __all__-exported plan_opener/"
+            "per_step/plan_closer/suspender/pseudo_suspender names. Replaces "
+            "the catalog shown below — Save (or Save as Default) to persist it."
+        )
+        discover_btn.clicked.connect(self._rebuild_scan_blocks)
+        btn_row.addWidget(discover_btn)
+        btn_row.addStretch(1)
+        card.body.addLayout(btn_row)
+
+        # {category: [name, ...]} — the persisted catalog itself (unlike
+        # devices, refreshed only on an explicit Discover, never live).
+        self._plan_building_blocks: dict[str, list[str]] = {}
+        self._scan_blocks_container = QtWidgets.QWidget()
+        self._scan_blocks_layout = QtWidgets.QVBoxLayout(self._scan_blocks_container)
+        self._scan_blocks_layout.setContentsMargins(S.px(2), S.px(2), S.px(2), S.px(2))
+        self._scan_blocks_layout.setSpacing(S.px(8))
+        scan_scroll = QtWidgets.QScrollArea()
+        scan_scroll.setWidgetResizable(True)
+        scan_scroll.setWidget(self._scan_blocks_container)
+        scan_scroll.setMinimumHeight(S.px(200))
+        card.body.addWidget(scan_scroll)
+
+        return card
+
+    def _add_plan_building_path(self) -> None:
+        chosen, _filt = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select plan_opener/per_step/plan_closer file", _paths.PROJECT_ROOT,
+            "Python files (*.py)",
+        )
+        if not chosen:
+            return
+        rel = os.path.relpath(chosen, _paths.PROJECT_ROOT)
+        value = rel if not rel.startswith("..") else chosen
+        self._plan_building_paths_widget.addItem(value)
+        self._rebuild_scan_blocks()
+
+    def _remove_plan_building_path(self) -> None:
+        for item in self._plan_building_paths_widget.selectedItems():
+            self._plan_building_paths_widget.takeItem(self._plan_building_paths_widget.row(item))
+        self._rebuild_scan_blocks()
+
+    def _add_suspender_path(self) -> None:
+        chosen, _filt = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select suspender file", _paths.PROJECT_ROOT, "Python files (*.py)",
+        )
+        if not chosen:
+            return
+        rel = os.path.relpath(chosen, _paths.PROJECT_ROOT)
+        value = rel if not rel.startswith("..") else chosen
+        self._suspender_paths_widget.addItem(value)
+        self._rebuild_scan_blocks()
+
+    def _remove_suspender_path(self) -> None:
+        for item in self._suspender_paths_widget.selectedItems():
+            self._suspender_paths_widget.takeItem(self._suspender_paths_widget.row(item))
+        self._rebuild_scan_blocks()
+
+    def _rebuild_scan_blocks(self) -> None:
+        """Re-scan the search paths and replace the persisted catalog."""
+        stub_paths = [
+            self._plan_building_paths_widget.item(i).text()
+            for i in range(self._plan_building_paths_widget.count())
+        ]
+        susp_paths = [
+            self._suspender_paths_widget.item(i).text()
+            for i in range(self._suspender_paths_widget.count())
+        ]
+        resolved_stub = [device_source.resolve_path(p) for p in stub_paths]
+        resolved_susp = [device_source.resolve_path(p) for p in susp_paths]
+        self._plan_building_blocks = sdisc.scan(resolved_stub, resolved_susp)
+        self._render_scan_blocks_display()
+
+    def _render_scan_blocks_display(self) -> None:
+        """Repaint the read-only catalog display from `self._plan_building_blocks`
+        (no rescan — called on profile load too, to show the persisted catalog
+        as-is until the user explicitly clicks Discover).
+
+        Each category is its own colour-coded card: a coloured left bar + bold
+        header + count badge, then the discovered names laid out as monospace
+        "chips" across :data:`_SCAN_BLOCK_COLUMNS` columns (or a muted
+        empty-state line). This reads far better than the old flat single-column
+        list once a beamline has a few dozen building blocks."""
+        while self._scan_blocks_layout.count():
+            item = self._scan_blocks_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        for category in sdisc.CATEGORIES:
+            names = self._plan_building_blocks.get(category) or []
+            self._scan_blocks_layout.addWidget(
+                self._make_scan_block_card(category, names)
+            )
+        self._scan_blocks_layout.addStretch(1)
+
+    def _make_scan_block_card(
+        self, category: str, names: list[str]
+    ) -> QtWidgets.QWidget:
+        """Build one colour-coded category card for the Scan blocks display."""
+        color = self._SCAN_BLOCK_COLORS.get(category, S.ACCENT)
+
+        frame = QtWidgets.QFrame()
+        frame.setObjectName("scanBlockCard")
+        frame.setStyleSheet(
+            f"QFrame#scanBlockCard {{ background: {S.PANEL};"
+            f" border: 1px solid {S.BORDER};"
+            f" border-left: {S.px(3)}px solid {color};"
+            f" border-radius: {S.px(4)}px; }}"
+        )
+        v = QtWidgets.QVBoxLayout(frame)
+        v.setContentsMargins(S.px(8), S.px(6), S.px(8), S.px(8))
+        v.setSpacing(S.px(6))
+
+        # Header: bold category name + a pill count badge.
+        hdr = QtWidgets.QHBoxLayout()
+        hdr.setSpacing(S.px(6))
+        title = QtWidgets.QLabel(self._SCAN_BLOCK_LABELS[category])
+        title.setStyleSheet(
+            f"color: {color}; font-weight: bold; border: none; background: transparent;"
+        )
+        hdr.addWidget(title)
+        badge = QtWidgets.QLabel(str(len(names)))
+        badge.setAlignment(QtCore.Qt.AlignCenter)
+        badge.setStyleSheet(
+            f"color: white; background: {color}; border: none;"
+            f" border-radius: {S.px(8)}px; padding: 0 {S.px(6)}px;"
+            f" min-width: {S.px(14)}px; font-weight: bold;"
+        )
+        hdr.addWidget(badge)
+        hdr.addStretch(1)
+        v.addLayout(hdr)
+
+        if not names:
+            empty = QtWidgets.QLabel("— none discovered —")
+            empty.setStyleSheet(
+                f"color: {S.MUTED}; font-style: italic;"
+                f" border: none; background: transparent;"
+            )
+            v.addWidget(empty)
+            return frame
+
+        chip_qss = (
+            f"QLabel {{ background: {S.INPUT_BG}; color: {S.INPUT_FG};"
+            f" border: 1px solid {S.BORDER}; border-radius: {S.px(3)}px;"
+            f" padding: {S.px(2)}px {S.px(6)}px; font-family: {S.MONO_CSS}; }}"
+        )
+        grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(S.px(6))
+        grid.setVerticalSpacing(S.px(4))
+        cols = self._SCAN_BLOCK_COLUMNS
+        for i, name in enumerate(names):
+            chip = QtWidgets.QLabel(name)
+            chip.setStyleSheet(chip_qss)
+            chip.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            row, col = divmod(i, cols)
+            grid.addWidget(chip, row, col, QtCore.Qt.AlignLeft)
+        grid.setColumnStretch(cols, 1)  # push chips left, leave slack on the right
+        v.addLayout(grid)
+        return frame
 
     # ── Data Viewer (databroker connection) ──────────────────────────────────────
 
@@ -727,6 +1038,35 @@ class ConfigDialog(QtWidgets.QDialog):
         card.body.addWidget(note)
         return card
 
+    # ── AutoPILOT (optional AI chat dock) ────────────────────────────────────────
+
+    def _build_autopilot_card(self) -> QtWidgets.QWidget:
+        card = S.make_card("AutoPILOT (optional AI chat panel)")
+        self._autopilot_enabled = QtWidgets.QCheckBox(
+            "Enable the AutoPILOT chat panel"
+        )
+        self._autopilot_enabled.setToolTip(
+            "Adds a dockable AI chat panel that can draft Bluesky plans from "
+            "natural-language requests. Off by default; takes effect "
+            "immediately on Save, no restart needed."
+        )
+        if not autopilot_bridge.AVAILABLE:
+            self._autopilot_enabled.setEnabled(False)
+            self._autopilot_enabled.setToolTip(
+                "AutoPILOT was not found (or its dependencies aren't "
+                "installed) next to this B-PILOT checkout."
+            )
+        card.body.addWidget(self._autopilot_enabled)
+        note = QtWidgets.QLabel(
+            "AutoPILOT is a separate, optional add-on — B-PILOT works fully "
+            "without it." if autopilot_bridge.AVAILABLE else
+            "AutoPILOT/ is not present or not importable — nothing to enable."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {S.MUTED};")
+        card.body.addWidget(note)
+        return card
+
     # ── Buttons ──────────────────────────────────────────────────────────────────
 
     def _build_buttons(self) -> QtWidgets.QWidget:
@@ -787,13 +1127,26 @@ class ConfigDialog(QtWidgets.QDialog):
         self._embedded_starter.setText(cfg["embedded_starter_script"])
 
         self._ui_scale.setValue(float(cfg["ui_scale"]))
+        self._autopilot_enabled.setChecked(bool(cfg.get("autopilot_enabled", False)))
 
         self._device_paths_widget.clear()
         self._device_paths_widget.addItems(cfg.get("device_search_paths") or [])
         self._device_selection_initial = dict(cfg.get("device_selection") or {})
-        self._device_category_overrides = dict(cfg.get("device_category_overrides") or {})
+        # Normalize a stray scalar (e.g. a hand-edited config, or one written
+        # before multi-category support) to a one-item list.
+        self._device_category_overrides = {
+            k: (v if isinstance(v, list) else [v])
+            for k, v in (cfg.get("device_category_overrides") or {}).items()
+        }
         self._device_checks.clear()
         self._rebuild_device_list()
+
+        self._plan_building_paths_widget.clear()
+        self._plan_building_paths_widget.addItems(cfg.get("plan_building_search_paths") or [])
+        self._suspender_paths_widget.clear()
+        self._suspender_paths_widget.addItems(cfg.get("suspender_search_paths") or [])
+        self._plan_building_blocks = dict(cfg.get("plan_building_blocks") or {})
+        self._render_scan_blocks_display()
 
         self._databroker_catalog.setText(cfg.get("databroker_catalog") or "")
         self._databroker_uri.setText(cfg.get("databroker_uri") or "")
@@ -817,6 +1170,7 @@ class ConfigDialog(QtWidgets.QDialog):
             "launch_script": self._launch_script.text().strip(),
             "embedded_starter_script": self._embedded_starter.text().strip(),
             "ui_scale": self._ui_scale.value(),
+            "autopilot_enabled": self._autopilot_enabled.isChecked(),
             "device_search_paths": [
                 self._device_paths_widget.item(i).text()
                 for i in range(self._device_paths_widget.count())
@@ -826,6 +1180,15 @@ class ConfigDialog(QtWidgets.QDialog):
                 for cat, names in self._device_checks.items()
             },
             "device_category_overrides": dict(self._device_category_overrides),
+            "plan_building_search_paths": [
+                self._plan_building_paths_widget.item(i).text()
+                for i in range(self._plan_building_paths_widget.count())
+            ],
+            "suspender_search_paths": [
+                self._suspender_paths_widget.item(i).text()
+                for i in range(self._suspender_paths_widget.count())
+            ],
+            "plan_building_blocks": dict(self._plan_building_blocks),
             "databroker_catalog": self._databroker_catalog.text().strip(),
             "databroker_uri": self._databroker_uri.text().strip(),
             "databroker_nexus_dir": self._databroker_nexus_dir.text().strip(),

@@ -1,7 +1,10 @@
 {
   "default_plan_file": "scans_stationary_gui_testing.py",
   "visible_plan_files": [
-    "scans_stationary_gui_testing.py"
+    "scans_stationary_gui_testing.py",
+    "bpilot/scans_stationary.py",
+    "bpilot/scan_skeletons.py",
+    "bpilot/scans_standard.py"
   ],
   "bluesky_startup": "from instrument.collection import *",
   "keep_kernel_on_exit": true,
@@ -90,13 +93,52 @@
   "databroker_catalog": "ht_hedm",
   "databroker_uri": "",
   "databroker_nexus_dir": "",
-  "acquisition_modes": {
-    "Step & shoot (area detector)": {"plan_opener": "generic_opener", "per_step": "step_and_shoot_", "plan_closer": "generic_closer"},
-    "Step & shoot (scalers only)": {"plan_opener": "scaler_opener", "per_step": "scaler_step_and_shoot_", "plan_closer": "scaler_closer"},
-    "Tomography step & shoot": {"plan_opener": "generic_opener", "per_step": "tomo_step_and_shoot_", "plan_closer": "generic_closer"},
-    "Tomography sweep": {"plan_opener": "generic_opener", "per_step": "tomo_sweep_", "plan_closer": "generic_closer"},
-    "Scaler sweep": {"plan_opener": "scaler_opener", "per_step": "scaler_sweep_", "plan_closer": "scaler_closer"},
-    "Step ladder (2x frames)": {"plan_opener": "generic_opener", "per_step": "step_ladder_", "plan_closer": "generic_closer"},
-    "Sweep ladder (2x frames)": {"plan_opener": "generic_opener", "per_step": "sweep_ladder_", "plan_closer": "generic_closer"}
+  "plan_building_search_paths": [
+    "instrument/plans/scan_hw_triggering.py",
+    "instrument/plans/scan_sw_triggering.py"
+  ],
+  "suspender_search_paths": [
+    "instrument/plans/suspenders.py",
+    "instrument/plans/suspenders_pseudo.py",
+    "instrument/plans/s20idd_plans/s20idd_suspenders.py"
+  ],
+  "plan_building_blocks": {
+    "plan_opener": [
+      "hardware_opener",
+      "non_countable_opener",
+      "scaler_opener",
+      "generic_opener"
+    ],
+    "per_step": [
+      "hardware_sweep_",
+      "step_and_shoot_",
+      "scaler_step_and_shoot_",
+      "tomo_step_and_shoot_",
+      "tomo_sweep_",
+      "scaler_sweep_",
+      "step_ladder_",
+      "sweep_ladder_",
+      "scaler_step_ladder_",
+      "scaler_inner_step_",
+      "handoff_sweep_",
+      "supersweep_"
+    ],
+    "plan_closer": [
+      "hardware_closer",
+      "generic_closer",
+      "scaler_closer"
+    ],
+    "suspender": [
+      "current_suspender",
+      "permit_suspender",
+      "disk_monitor",
+      "keyence_d1_monitor",
+      "keyence_d2_monitor",
+      "Dlight_monitor"
+    ],
+    "pseudo_suspender": [
+      "filename_mutator",
+      "drive_checker"
+    ]
   }
 }

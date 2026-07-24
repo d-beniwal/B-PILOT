@@ -61,13 +61,14 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._param_widgets: dict[str, tuple] = {}
         self._current_params: list[ParamSpec] = []
         self._console_ready = False
+        self._editing = False
         # scan_skeletons.py's six *args-based plans (see plan_parser.SKELETON_SHAPES):
-        # a composite motor-rows + acquisition-mode form replaces the ordinary
-        # per-ParamSpec grid for `*args`/plan_opener/per_step/plan_closer. Reset
+        # a dedicated motor-rows widget replaces the ordinary per-ParamSpec field
+        # for the bare `*args` (plan_opener/per_step/plan_closer are ordinary
+        # `block`-dtype ParamSpecs and render in the normal grid below it). Reset
         # alongside every other param-grid rebuild in `_clear_param_grid`.
         self._skeleton: tuple[str, bool] | None = None
         self._motor_rows_widget: MotorRowsWidget | None = None
-        self._acq_mode_combo: QtWidgets.QComboBox | None = None
 
         self._build_ui()
         self._populate_file_browser()
@@ -137,16 +138,6 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         param_card.body.addWidget(param_scroll)
         vsplit.addWidget(param_card)
 
-        # ── Command card (live, coloured) ──
-        cmd_card = S.make_card("Command  (updates live · Run in console →, or Copy)")
-        self._cmd_display = QtWidgets.QTextEdit()
-        self._cmd_display.setObjectName("mono")
-        self._cmd_display.setReadOnly(True)
-        self._cmd_display.setMinimumHeight(S.px(44))
-        self._cmd_display.setFont(QtGui.QFont(S.MONO_FAMILIES[0]))
-        cmd_card.body.addWidget(self._cmd_display)
-        vsplit.addWidget(cmd_card)
-
         # ── Run notes card ── attached to the run on Run, then cleared.
         notes_card = S.make_card("Run notes   (attached to this run, then cleared)")
         self._notes = QtWidgets.QPlainTextEdit()
@@ -158,18 +149,35 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         notes_card.body.addWidget(self._notes)
         vsplit.addWidget(notes_card)
 
+        # ── Command card (live, coloured) ──
+        cmd_card = S.make_card("Command  (updates live · Run in console →, or Copy)")
+        self._cmd_display = QtWidgets.QTextEdit()
+        self._cmd_display.setObjectName("mono")
+        self._cmd_display.setReadOnly(True)
+        self._cmd_display.setMinimumHeight(S.px(44))
+        self._cmd_display.setFont(QtGui.QFont(S.MONO_FAMILIES[0]))
+        self._cmd_display.textChanged.connect(self._on_cmd_display_edited)
+        cmd_card.body.addWidget(self._cmd_display)
+        vsplit.addWidget(cmd_card)
+
         vsplit.setStretchFactor(0, 1)   # Parameters takes the slack by default
         vsplit.setStretchFactor(1, 0)
         vsplit.setStretchFactor(2, 0)
-        vsplit.setSizes([420, 130, 110])
+        vsplit.setSizes([420, 110, 130])
         rlay.addWidget(vsplit, 1)
 
         # ── Fixed action row (always visible below the resizable panels) ──
         btn_row = QtWidgets.QHBoxLayout()
-        self._build_btn = QtWidgets.QPushButton("Build / Update")
-        self._build_btn.clicked.connect(self._update_command)
         self._copy_btn = QtWidgets.QPushButton("Copy")
         self._copy_btn.clicked.connect(self._copy_command)
+        self._edit_btn = QtWidgets.QPushButton("✎ Edit")
+        self._edit_btn.setCheckable(True)
+        self._edit_btn.setToolTip(
+            "Hand-edit the command text before sending it — for edge cases the "
+            "parameter form can't express. Toggling off discards edits and "
+            "resyncs to the form."
+        )
+        self._edit_btn.toggled.connect(self._on_edit_toggled)
         self._add_btn = QtWidgets.QPushButton("Add to Queue")
         self._add_btn.setToolTip("Append this plan to the queue (bottom-right).")
         self._add_btn.clicked.connect(self._queue_command)
@@ -178,8 +186,8 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._run_btn.clicked.connect(self._run_command)
         self._run_btn.setEnabled(False)
         self._run_btn.setToolTip("Launch the IPython session first (top toolbar).")
-        btn_row.addWidget(self._build_btn)
         btn_row.addWidget(self._copy_btn)
+        btn_row.addWidget(self._edit_btn)
         btn_row.addStretch(1)
         self._status_lbl = QtWidgets.QLabel("")
         self._status_lbl.setStyleSheet(f"color: {S.MUTED};")
@@ -202,6 +210,35 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             "" if ready else "Launch the IPython session first (top toolbar)."
         )
         self._live_validate()
+
+    # ── Edit mode (hand-edit the command before sending) ────────────────────────
+
+    def _on_edit_toggled(self, editing: bool) -> None:
+        self._editing = editing
+        if editing:
+            text = self._cmd_display.toPlainText()
+            self._cmd_display.setPlainText(text)  # drop HTML colouring
+            self._cmd_display.setReadOnly(False)
+            self._cmd_display.setStyleSheet(f"border: 2px solid {S.ACCENT};")
+            self._edit_btn.setStyleSheet(
+                f"QPushButton{{background:{S.ACCENT};color:white;font-weight:bold;}}"
+                f"QPushButton:hover{{background:{S.ACCENT_D};}}"
+            )
+            self._cmd_display.setFocus()
+        else:
+            self._cmd_display.setReadOnly(True)
+            self._cmd_display.setStyleSheet("")
+            self._edit_btn.setStyleSheet("")
+            self._live_validate()  # discard edits, resync from the form
+
+    def _on_cmd_display_edited(self) -> None:
+        if self._editing:
+            self._live_validate()
+
+    def _force_exit_edit_mode(self) -> None:
+        """Bail out of edit mode when the plan/form changes out from under it."""
+        if self._editing:
+            self._edit_btn.setChecked(False)  # triggers _on_edit_toggled(False)
 
     # ── File browser ────────────────────────────────────────────────────────────
 
@@ -260,6 +297,10 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         """Re-scan the file browser / plan dropdown after a config change."""
         self._refresh_files()
 
+    def has_plan(self, name: str) -> bool:
+        """Whether `name` is currently selectable (its source file is checked)."""
+        return name in self._plan_list
+
     # ── Load from a queued command ("Copy to form") ─────────────────────────────
 
     def load_from_command(self, command: str) -> None:
@@ -273,6 +314,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         restored (e.g. the queue item was hand-edited) is left at its default
         and reported in the status line rather than aborting the whole load.
         """
+        self._force_exit_edit_mode()
         match = _RE_PLAN.search(command or "")
         if not match:
             self._flash_status("Couldn't find a plan call in that command.")
@@ -349,11 +391,24 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             )
         elif spec.dtype == "choice":
             widget.setCurrentText(str(ast.literal_eval(value_node)))
+        elif spec.dtype == "block":
+            if not isinstance(value_node, ast.Name):
+                raise ValueError("expected a bare function reference")
+            idx = widget.findText(value_node.id)
+            if idx < 0:
+                widget.addItem(value_node.id)
+                idx = widget.count() - 1
+            widget.setCurrentIndex(idx)
         else:  # str / int / float / unknown -> line edit
             widget.setText(str(ast.literal_eval(value_node)))
 
     def _apply_skeleton_args(self, call: ast.Call, skipped: list[str]) -> None:
-        """Restore the motor rows + acquisition mode for a scan_skeletons.py plan."""
+        """Restore the motor rows for a scan_skeletons.py plan.
+
+        plan_opener/per_step/plan_closer are ordinary `block`-dtype ParamSpecs
+        now, so they're restored by `load_from_command`'s generic keyword loop,
+        not here.
+        """
         shape, _relative = self._skeleton
         width = _SKELETON_ROW_WIDTH.get(shape)
         if width and call.args:
@@ -363,25 +418,6 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 self._motor_rows_widget.load_rows(rows)
             except Exception:  # noqa: BLE001
                 skipped.append("Motors")
-
-        kw_values = {kw.arg: kw.value for kw in call.keywords if kw.arg}
-        opener, per_step, closer = (
-            kw_values.get("plan_opener"),
-            kw_values.get("per_step"),
-            kw_values.get("plan_closer"),
-        )
-        if isinstance(opener, ast.Name) and isinstance(per_step, ast.Name) and isinstance(closer, ast.Name):
-            modes = config.get("acquisition_modes") or {}
-            for label, mode in modes.items():
-                if (
-                    mode.get("plan_opener") == opener.id
-                    and mode.get("per_step") == per_step.id
-                    and mode.get("plan_closer") == closer.id
-                ):
-                    self._acq_mode_combo.setCurrentText(label)
-                    break
-            else:
-                skipped.append("Acquisition mode")
 
     def _on_file_toggle(self, _checked: bool) -> None:
         self._refresh_plan_dropdown(preserve_selection=True)
@@ -423,6 +459,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     # ── Parameter form ────────────────────────────────────────────────────────────
 
     def _on_plan_change(self, *_) -> None:
+        self._force_exit_edit_mode()
         plan_name = self._plan_cb.currentText()
         if not plan_name:
             return
@@ -460,7 +497,6 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         # read after switching to a different plan.
         self._skeleton = None
         self._motor_rows_widget = None
-        self._acq_mode_combo = None
 
     @staticmethod
     def _label_text(spec: ParamSpec) -> str:
@@ -486,9 +522,9 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     def _rebuild_param_form(self, params: list[ParamSpec], row_offset: int = 0) -> None:
         """Build the ordinary per-`ParamSpec` grid, starting at grid row `row_offset`.
 
-        `row_offset` lets `_rebuild_skeleton_form` place the composite motor-rows
-        + acquisition-mode widgets in the rows above this one without a second
-        grid; every other call site keeps the default (row 0) unchanged.
+        `row_offset` lets `_rebuild_skeleton_form` place the motor-rows widget
+        in the row above this one without a second grid; every other call site
+        keeps the default (row 0) unchanged.
         """
         if row_offset == 0:
             self._clear_param_grid()
@@ -539,6 +575,19 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 widget.addItems(device_source.get_catalog().names_for(spec.category))
                 widget.setFixedHeight(S.px(90))
                 widget.itemSelectionChanged.connect(self._live_validate)
+            elif spec.dtype == "block":
+                # scan_skeletons.py building-block function reference (plan_opener/
+                # per_step/plan_closer) -> dropdown of names from the active
+                # profile's discovered `plan_building_blocks` catalog. Unlike
+                # `device`, never offer a blank entry: a missing per_step breaks
+                # the plan at run time (no sensible "omit" fallback), so this dtype
+                # always requires a real selection (see `_field_error`).
+                widget = S.NoScrollComboBox()
+                names = (config.get("plan_building_blocks") or {}).get(spec.category) or []
+                widget.addItems(names)
+                if spec.default not in (None, _NODEFAULT) and str(spec.default) in names:
+                    widget.setCurrentText(str(spec.default))
+                widget.currentTextChanged.connect(self._live_validate)
             else:  # str / int / float / unknown -> line edit
                 widget = QtWidgets.QLineEdit()
                 # Datatype enforcement: numeric fields reject non-numeric input.
@@ -560,8 +609,10 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._param_grid.setRowStretch(len(params) + row_offset, 1)
 
     def _rebuild_skeleton_form(self, skeleton: tuple[str, bool], params: list[ParamSpec]) -> None:
-        """Composite form for a scan_skeletons.py plan: motor rows + acquisition
-        mode (rows 0-1), then the ordinary docstring-driven kwargs below (row 2+).
+        """Composite form for a scan_skeletons.py plan: motor rows (row 0), then
+        the ordinary docstring-driven kwargs below (row 1+) — including
+        plan_opener/per_step/plan_closer, which are ordinary `block`-dtype
+        ParamSpecs and need no special handling here.
 
         See plan_parser.SKELETON_SHAPES for `skeleton` = (shape, relative), and
         skeleton_widgets.MotorRowsWidget for the motor-rows widget itself.
@@ -584,22 +635,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._param_grid.addWidget(motors_lbl, 0, 0)
         self._param_grid.addWidget(self._motor_rows_widget, 0, 1)
 
-        self._acq_mode_combo = S.NoScrollComboBox()
-        modes = config.get("acquisition_modes") or {}
-        self._acq_mode_combo.addItems(sorted(modes.keys()))
-        self._acq_mode_combo.currentTextChanged.connect(self._live_validate)
-        mode_lbl = S.LabelRight("Acquisition mode:  ★")
-        S.HoverTip(
-            mode_lbl,
-            "Resolves to this plan's plan_opener/per_step/plan_closer trio — "
-            "curated per beamline in the active profile's acquisition_modes "
-            "setting, since these are function references with no dtype of "
-            "their own in the Parameters grammar.",
-        )
-        self._param_grid.addWidget(mode_lbl, 1, 0)
-        self._param_grid.addWidget(self._acq_mode_combo, 1, 1)
-
-        self._rebuild_param_form(params, row_offset=2)
+        self._rebuild_param_form(params, row_offset=1)
 
     def _rebuild_generic_form(self) -> None:
         self._clear_param_grid()
@@ -648,6 +684,13 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             if not widget.selectedItems() and spec.required:
                 return f"{short}: required"
             return None
+        if spec.dtype == "block":
+            # Always required, regardless of the signature's default (see
+            # `_rebuild_param_form`'s "block" branch) — a blank plan_opener/
+            # per_step/plan_closer has no working fallback.
+            if not widget.currentText().strip():
+                return f"{short}: required"
+            return None
 
         # str / int / float / unknown -> line edit
         raw = widget.text().strip()
@@ -668,19 +711,17 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         return None
 
     def _skeleton_errors(self) -> list[str]:
-        """Errors for the composite motor-rows + acquisition-mode widgets.
+        """Errors for the dedicated motor-rows widget.
 
-        Empty list when no skeleton is active, or when both are valid. Shared by
+        Empty list when no skeleton is active, or the widget is valid. Shared by
         `_live_validate` (form-field flagging) and `_parse_params` (value
-        extraction) so the two can't drift out of sync.
+        extraction) so the two can't drift out of sync. plan_opener/per_step/
+        plan_closer are ordinary `block`-dtype ParamSpecs now, so their errors
+        come from the normal per-spec loop, not from here.
         """
         if not self._skeleton:
             return []
-        errs = [f"Motors: {e}" for e in self._motor_rows_widget.errors()]
-        modes = config.get("acquisition_modes") or {}
-        if not modes.get(self._acq_mode_combo.currentText().strip()):
-            errs.append("Acquisition mode: required")
-        return errs
+        return [f"Motors: {e}" for e in self._motor_rows_widget.errors()]
 
     def _live_validate(self) -> None:
         """Re-check every field, flag invalid ones, and gate the Run button."""
@@ -696,10 +737,23 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 if err:
                     errors.append(err)
 
+        if self._editing:
+            # The command box is user-owned text now — never rebuild it here,
+            # and gate on non-blank text rather than per-field validity.
+            has_text = bool(self._cmd_display.toPlainText().strip())
+            self._run_btn.setEnabled(self._console_ready and has_text)
+            self._add_btn.setEnabled(has_text)
+            self._edit_btn.setEnabled(True)
+            self._status_lbl.setText("" if has_text else "⚠ command is empty")
+            self._status_lbl.setToolTip("")
+            return
+
         self._run_btn.setEnabled(self._console_ready and not errors)
         # Add-to-queue needs only a valid form (you can build the queue before
         # launching IPython; the scheduler dispatches once the console is up).
         self._add_btn.setEnabled(not errors)
+        # Can't start hand-editing an invalid/placeholder command.
+        self._edit_btn.setEnabled(not errors)
         if errors:
             n = len(errors)
             self._status_lbl.setText(f"⚠ {n} field{'s' if n > 1 else ''} to fix")
@@ -731,11 +785,6 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 # literals, "[..]" list literals) — spliced verbatim as leading
                 # positional args in _make_re_line, no repr()/RawCode needed here.
                 values["__positional__"] = self._motor_rows_widget.tokens()
-                modes = config.get("acquisition_modes") or {}
-                mode = modes.get(self._acq_mode_combo.currentText().strip(), {})
-                values["plan_opener"] = RawCode(mode["plan_opener"])
-                values["per_step"] = RawCode(mode["per_step"])
-                values["plan_closer"] = RawCode(mode["plan_closer"])
 
         for spec in self._current_params:
             widget = self._param_widgets[spec.name][1]
@@ -784,6 +833,14 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 elif spec.required:
                     errors.append(f"{short}: required")
                 # else: empty -> omit the arg (plan uses its default, e.g. [])
+            elif spec.dtype == "block":
+                # RawCode -> emitted unquoted (a real function reference).
+                # Always required (see `_field_error`) — never omitted.
+                val = widget.currentText().strip()
+                if val:
+                    values[spec.name] = RawCode(val)
+                else:
+                    errors.append(f"{short}: required")
             elif spec.dtype == "float":
                 self._read_number(spec, widget, values, errors, short, float, "number")
             elif spec.dtype == "int":
@@ -834,22 +891,13 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             # MotorRowsWidget.tokens()) must come first — Python syntax requires
             # positional args before keyword args.
             args = list(values.pop("__positional__", []))
-            rendered_names = set()
             for spec in self._current_params:
                 if spec.name not in values:
                     continue
                 val = values[spec.name]
-                # RawCode (device refs) emit verbatim; everything else via repr().
+                # RawCode (device/block refs) emit verbatim; everything else via repr().
                 rendered = str(val) if isinstance(val, RawCode) else repr(val)
                 args.append(f"{spec.name}={rendered}")
-                rendered_names.add(spec.name)
-            # plan_opener/per_step/plan_closer (from the Acquisition mode combo) are
-            # never backed by a ParamSpec by design — they must stay undocumented so
-            # the ordinary form doesn't also show them — so the loop above never
-            # reaches them. Emit them here instead; always RawCode (function refs).
-            for name in ("plan_opener", "per_step", "plan_closer"):
-                if name in values and name not in rendered_names:
-                    args.append(f"{name}={values[name]}")
             inner = f"{plan_name}({', '.join(args)})"
         if notes:
             # Lands in the run's start document (cat[uid].metadata["start"]["notes"]).
@@ -884,10 +932,6 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             return
         self._set_cmd_colored(import_line, re_line)
 
-    def _update_command(self) -> None:
-        # The preview updates live; this button is just a manual refresh.
-        self._live_validate()
-
     def _set_cmd_text(self, text: str) -> None:
         """Show a plain (muted) message in the command box."""
         self._cmd_display.setPlainText(text)
@@ -902,34 +946,61 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         )
         self._cmd_display.setHtml(doc)
 
-    def _copy_command(self) -> None:
+    def _command_text(self) -> str | None:
+        """The text to send/copy: the hand-edited box verbatim while editing,
+        else the form-composed two-line command."""
+        if self._editing:
+            text = self._cmd_display.toPlainText().strip()
+            return text or None
         import_line, re_line = self._compose_lines()
         if not re_line:
+            return None
+        return f"{import_line}\n{re_line}"
+
+    def _copy_command(self) -> None:
+        text = self._command_text()
+        if not text:
             self._flash_status("Nothing to copy — fix fields first.")
             return
-        QtWidgets.QApplication.clipboard().setText(f"{import_line}\n{re_line}")
+        QtWidgets.QApplication.clipboard().setText(text)
         self._flash_status("Copied.")
 
     def _run_command(self) -> None:
-        import_line, re_line = self._compose_lines()
-        if not re_line:
+        text = self._command_text()
+        if not text:
             return
         notes = self._notes.toPlainText().strip()
-        self.runRequested.emit(f"{import_line}\n{re_line}", notes)
+        self.runRequested.emit(text, notes)
         # The notes' job is done once the run is launched — clear them.
         self._notes.clear()
-        self._flash_status(
-            "Sent to console." + (" Notes attached & cleared." if notes else "")
-        )
+        if self._editing:
+            self._flash_status(
+                "Sent to console (edited)." + (
+                    " Notes NOT attached — add md={'notes': ...} yourself."
+                    if notes else ""
+                )
+            )
+        else:
+            self._flash_status(
+                "Sent to console." + (" Notes attached & cleared." if notes else "")
+            )
 
     def _queue_command(self) -> None:
-        import_line, re_line = self._compose_lines()
-        if not re_line:
+        text = self._command_text()
+        if not text:
             return
         notes = self._notes.toPlainText().strip()
-        self.queueRequested.emit(f"{import_line}\n{re_line}", notes)
+        self.queueRequested.emit(text, notes)
         self._notes.clear()
-        self._flash_status("Added to queue." + (" Notes attached." if notes else ""))
+        if self._editing:
+            self._flash_status(
+                "Added to queue (edited)." + (
+                    " Notes NOT attached — add md={'notes': ...} yourself."
+                    if notes else ""
+                )
+            )
+        else:
+            self._flash_status("Added to queue." + (" Notes attached." if notes else ""))
 
     def _flash_status(self, msg: str) -> None:
         self._status_lbl.setText(msg)

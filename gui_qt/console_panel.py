@@ -22,6 +22,7 @@ action (:meth:`load_bluesky`).
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import sys
@@ -75,6 +76,10 @@ class ConsolePanel(QtWidgets.QWidget):
         self._connection_file: str | None = None
         self._proc = None                    # Popen of a kernel we started (else None)
         self._log_file: str | None = None    # transcript file the recorder appends to
+        # msg_id -> (exprs, callback) for in-flight silent status queries (see
+        # query_values); dispatched from _on_shell_msg alongside the existing
+        # kernel_info_reply handshake handling.
+        self._pending_queries: dict[str, tuple[dict, object]] = {}
 
         self._stack = QtWidgets.QStackedWidget()
         self._placeholder = QtWidgets.QLabel(_PLACEHOLDER)
@@ -363,6 +368,27 @@ class ConsolePanel(QtWidgets.QWidget):
         # kernel; kernel_client.execute() would not echo.
         self.jupyter_widget.execute(source=src, hidden=False)
 
+    def query_values(self, exprs: dict[str, str], callback) -> None:
+        """Silently evaluate `{label: python_expr}`; `callback(dict[label, bool|None])`.
+
+        Uses ``user_expressions`` on a silent, no-history execute — per the
+        Jupyter messaging spec this suppresses IOPub broadcast entirely (no
+        visible output in the console, no execution-count bump, no history),
+        while still returning each expression's repr on the shell channel's
+        ``execute_reply``. An expression that errors (e.g. a NameError before
+        the relevant name is imported into the kernel) resolves to None rather
+        than raising. Mirrors qtconsole's own internal (private)
+        ``FrontendWidget._silent_exec_callback`` pattern, batched into one
+        round trip instead of one call per expression.
+        """
+        if not self.is_running():
+            callback({k: None for k in exprs})
+            return
+        msg_id = self.kernel_client.execute(
+            "", silent=True, store_history=False, user_expressions=exprs
+        )
+        self._pending_queries[msg_id] = (exprs, callback)
+
     def is_busy(self) -> bool:
         """True while the kernel is executing a cell."""
         return self._busy
@@ -372,12 +398,32 @@ class ConsolePanel(QtWidgets.QWidget):
         return self._ready
 
     def _on_shell_msg(self, msg) -> None:
+        mtype = msg.get("msg_type") or msg.get("header", {}).get("msg_type")
+        msg_id = msg.get("parent_header", {}).get("msg_id")
+        if msg_id in self._pending_queries and mtype == "execute_reply":
+            self._dispatch_query_reply(msg_id, msg)
+            return
         if self._ready:
             return
-        mtype = msg.get("msg_type") or msg.get("header", {}).get("msg_type")
         if mtype == "kernel_info_reply":
             self._ready = True
             self.ready.emit()
+
+    def _dispatch_query_reply(self, msg_id: str, msg) -> None:
+        """Resolve a pending `query_values` call from its execute_reply."""
+        exprs, callback = self._pending_queries.pop(msg_id)
+        user_exprs = msg.get("content", {}).get("user_expressions", {})
+        result: dict[str, object] = {}
+        for key in exprs:
+            entry = user_exprs.get(key, {})
+            if entry.get("status") == "ok":
+                try:
+                    result[key] = ast.literal_eval(entry["data"]["text/plain"])
+                except Exception:  # noqa: BLE001
+                    result[key] = None
+            else:
+                result[key] = None
+        callback(result)
 
     def _on_jw_executing(self, source) -> None:
         self._busy = True
@@ -474,6 +520,7 @@ class ConsolePanel(QtWidgets.QWidget):
         self._down = False
         self._connection_file = None
         self._log_file = None
+        self._pending_queries.clear()
         self._stack.setCurrentWidget(self._placeholder)
 
     # ── Qt ────────────────────────────────────────────────────────────────────

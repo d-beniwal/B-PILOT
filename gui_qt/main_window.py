@@ -14,6 +14,7 @@ from . import device_source
 from . import paths
 from . import style as S
 from .console_panel import ConsolePanel
+from .mode_buttons import ModeButtonBar
 from .plan_runner import PlanRunnerPanel
 from .queue_panel import QueuePanel
 from .run_controls import RunControlBar
@@ -39,6 +40,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console = ConsolePanel()
         self.session_log = SessionLogView()
         self.run_controls = RunControlBar(self.console, self._shutdown_kernel)
+        self.mode_buttons = ModeButtonBar(self.console)
         self.queue = QueuePanel(self.console)
         self.runner.runRequested.connect(self._on_run)
         self.runner.queueRequested.connect(self._on_queue)
@@ -65,11 +67,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setCentralWidget(central)
 
-        # Optional AutoPILOT chat dock -- absent entirely if AutoPILOT/ isn't
-        # there or its deps aren't installed (see gui_qt/autopilot_bridge.py).
-        if autopilot_bridge.AVAILABLE:
-            self.autopilot_chat = autopilot_bridge.ChatDockWidget(self)
-            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.autopilot_chat)
+        # Optional AutoPILOT chat dock -- off by default, absent entirely if
+        # AutoPILOT/ isn't there or its deps aren't installed (see
+        # gui_qt/autopilot_bridge.py); enabled via Configuration -> Appearance.
+        self.autopilot_chat = None
+        self._sync_autopilot_dock()
 
         self._build_menu()
         self._apply_launch_mode()   # show/hide script params + set control states
@@ -248,7 +250,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "can watch a running plan live without waiting for the prompt.",
         )
         console_card.body.addWidget(self._console_tabs)
-        console_card.body.addWidget(self.run_controls)   # Stop run / recovery / shutdown
+        # BEAMMODE/TESTMODE toggles share run_controls' top row with Stop run
+        # / Shut down kernel, rather than sitting in a row of their own.
+        self.run_controls.add_trailing_widget(self.mode_buttons)
+        console_card.body.addWidget(self.run_controls)
         vsplit.addWidget(console_card)
 
         queue_card = S.make_card("Plan queue (scheduler)")
@@ -313,6 +318,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # nothing else to push.
             device_source.set_beamline(config.get("beamline"))
             self.runner.apply_config()
+            self._sync_autopilot_dock()
             self._set_toolbar_status("Configuration saved.")
             if config.get("ui_scale") != old_scale:
                 QtWidgets.QMessageBox.information(
@@ -320,6 +326,23 @@ class MainWindow(QtWidgets.QMainWindow):
                     "Restart required",
                     "Restart B-PILOT for the new UI scale to take effect.",
                 )
+
+    def _sync_autopilot_dock(self) -> None:
+        """Create or tear down the AutoPILOT chat dock to match the current
+        "Enable the AutoPILOT chat panel" setting (Configuration -> Appearance).
+
+        Called once at startup and again after every Configuration save, so
+        toggling the checkbox takes effect immediately — no restart needed.
+        """
+        want = autopilot_bridge.AVAILABLE and bool(config.get("autopilot_enabled"))
+        have = self.autopilot_chat is not None
+        if want and not have:
+            self.autopilot_chat = autopilot_bridge.ChatDockWidget(self.runner, self)
+            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.autopilot_chat)
+        elif have and not want:
+            self.removeDockWidget(self.autopilot_chat)
+            self.autopilot_chat.deleteLater()
+            self.autopilot_chat = None
 
     def _restart_kernel(self) -> None:
         # The kernel runs detached (client-only connection), so "restart" is a
@@ -475,6 +498,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._act_shutdown.setEnabled(True)
         self.runner.set_console_ready(True)
         self.run_controls.set_console_ready(True)
+        self.mode_buttons.set_console_ready(True)
         where = self._workdir.text().strip()
         if attached:
             self._set_toolbar_status(
@@ -540,6 +564,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._act_shutdown.setEnabled(False)
         self.runner.set_console_ready(False)
         self.run_controls.set_console_ready(False)
+        self.mode_buttons.set_console_ready(False)
         self.session_log.stop()   # kernel gone — stop polling (keep text visible)
         self._apply_launch_mode()  # re-apply mode-specific control states
 

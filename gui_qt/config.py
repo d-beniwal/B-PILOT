@@ -96,6 +96,11 @@ DEFAULTS: dict = {
     # startup (see style.SCALE) — for high-DPI screens (e.g. 4K). Takes
     # effect on the next launch, not live.
     "ui_scale": 1.0,
+    # Optional AutoPILOT chat dock (../AutoPILOT, see gui_qt/autopilot_bridge.py).
+    # Off by default -- it's an add-on AI layer, not core B-PILOT -- toggled
+    # from Configuration -> Appearance. Has no effect if AutoPILOT/ isn't
+    # present or its deps aren't installed (autopilot_bridge.AVAILABLE).
+    "autopilot_enabled": False,
     # Devices (see device_discovery.py / device_source.py):
     "device_search_paths": [],   # directories scanned for __all__-exported devices
     # {category: {device_name: shown_bool}}; unseen names default shown.
@@ -107,6 +112,18 @@ DEFAULTS: dict = {
     # discovered category everywhere one is used (device_source.get_catalog()
     # and the Configuration dialog's Devices tab).
     "device_category_overrides": {},
+    # Files scanned by scan_building_discovery.scan() for scan_skeletons.py's
+    # plan_opener/per_step/plan_closer (common to every beamline) and
+    # suspenders/pseudo_suspenders (common + one <bl>_suspenders.py). Same
+    # static-analysis, never-import guarantee as device_search_paths.
+    "plan_building_search_paths": [],
+    "suspender_search_paths": [],
+    # {category: [name, ...]} for plan_opener/per_step/plan_closer/suspender/
+    # pseudo_suspender, as of the last Discover click. Unlike device_selection
+    # this is NOT rescanned live on every use — these building blocks change
+    # rarely, so the catalog itself is committed (like device_selection) and
+    # only refreshed via Configuration -> Scan blocks -> Discover, then Save.
+    "plan_building_blocks": {},
     # Data viewer (gui_qt/viewer.py). `databroker_catalog` is a NAME registered
     # in ~/.local/share/intake/*.yml — never a credentialed connection string.
     # Empty means "auto-detect from instrument/iconfig.yml by account", the
@@ -131,14 +148,6 @@ DEFAULTS: dict = {
         "file_references": True,
         "data_preview": False,
     },
-    # Skeleton-scan acquisition modes (see gui_qt/skeleton_widgets.py and
-    # plan_parser.SKELETON_SHAPES): {label: {"plan_opener": "<name>",
-    # "per_step": "<name>", "plan_closer": "<name>"}}. Hand-curated per beamline
-    # from verified instrument/plans/scan_sw_triggering.py names -- never
-    # auto-scraped from user plan files, several of which reference broken/
-    # undefined per_step names. Meant to be committed (like device_selection),
-    # not workstation-specific.
-    "acquisition_modes": {},
 }
 
 # Keys that stay diff-only (omitted from a saved profile unless overridden),

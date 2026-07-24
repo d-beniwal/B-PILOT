@@ -116,11 +116,15 @@ def get_catalog(beamline: str | None = None, *, search_paths: list[str] | None =
     resolved_paths = [resolve_path(p) for p in raw_paths]
     by_cat: dict[str, list[str]] = {}
     for device in _discovery.scan(resolved_paths):
-        category = overrides.get(device.name, device.category)
-        cat_selection = selection.get(category, {})
-        if not cat_selection.get(device.name, True):  # unseen names default shown
-            continue
-        by_cat.setdefault(category, []).append(device.name)
+        # A device can belong to more than one category (an explicit override
+        # replaces the single auto-detected one with a list) so it can appear
+        # as an option in more than one plan-parameter field.
+        categories = overrides.get(device.name) or [device.category]
+        for category in categories:
+            cat_selection = selection.get(category, {})
+            if not cat_selection.get(device.name, True):  # unseen names default shown
+                continue
+            by_cat.setdefault(category, []).append(device.name)
 
     catalog = DeviceCatalog(bl, by_cat)
     _cache[key] = catalog

@@ -16,7 +16,8 @@ NumPy-style ``Parameters`` grammar so the GUI can build a form::
     <name> : <dtype>[ [<units>]]
         <short name> :: <long description>
 
-* dtype in {str, int, float, bool, choice{a, b, ...}, positions}
+* dtype in {str, int, float, bool, choice{a, b, ...}, positions, device{cat},
+  device_list{cat}, block{cat}}
 * units optional, e.g. [deg], [mm], [s], [1/deg]
 * body split on the first ' :: ' -> short label / long tooltip
 * default + required come from the signature (no default => required;
@@ -57,8 +58,10 @@ DEFAULT_PLAN_FILE = "scans_stationary_gui_testing.py"
 # One parsed argument.  default/required/blank_omits come from the SIGNATURE;
 # dtype/units/short/long/choices/category come from the DOCSTRING.
 #
-# ``category`` is only meaningful for the device dtypes: it names the device
-# group (e.g. "area_detector", "scaler") the GUI should offer for this field.
+# ``category`` is only meaningful for the device dtypes and ``block``: for
+# device/device_list it names the device group (e.g. "area_detector",
+# "scaler"); for block it names which of the profile's `plan_building_blocks`
+# lists (plan_opener/per_step/plan_closer) the GUI should offer.
 ParamSpec = namedtuple(
     "ParamSpec",
     "name dtype units short long default required choices blank_omits category",
@@ -69,9 +72,16 @@ _NODEFAULT = object()  # sentinel: signature arg with no default (=> required)
 
 # dtypes the form knows how to render.  ``device`` = one device object,
 # ``device_list`` = a list of device objects; both emit UNQUOTED names (see
-# RawCode) and take an optional ``{category}`` filter.
+# RawCode) and take an optional ``{category}`` filter. ``block`` = one
+# scan_skeletons.py building-block function reference (plan_opener/per_step/
+# plan_closer) -- also emits UNQUOTED names, but its dropdown is populated
+# from the active profile's `plan_building_blocks` catalog (see
+# scan_building_discovery.py) rather than device_source's device catalog, and
+# it takes a required ``{category}`` naming which of that catalog's lists
+# (plan_opener/per_step/plan_closer) to offer.
 _KNOWN_DTYPES = {
     "str", "int", "float", "bool", "choice", "positions", "device", "device_list",
+    "block",
 }
 
 # ``instrument/plans/scan_skeletons.py``'s six generic scan plans all take their
@@ -250,6 +260,7 @@ def _parse_typespec(typespec: str) -> tuple[str, str, list[str], str | None]:
         'device{area_detector}'-> ('device', '', [], 'area_detector')
         'device_list{scaler}'  -> ('device_list', '', [], 'scaler')
         'device'               -> ('device', '', [], None)
+        'block{plan_opener}'   -> ('block', '', [], 'plan_opener')
     """
     units = ""
     m = re.search(r"\[([^\]]*)\]\s*$", typespec)
@@ -261,8 +272,9 @@ def _parse_typespec(typespec: str) -> tuple[str, str, list[str], str | None]:
     choices: list[str] = []
     category: str | None = None
     # Brace payload after the dtype keyword: choice{a,b} | device{cat} |
-    # device_list{cat}.  choice -> comma list; device* -> single category.
-    bm = re.match(r"(choice|device_list|device)\s*\{(.*)\}$", dtype)
+    # device_list{cat} | block{cat}.  choice -> comma list; device*/block ->
+    # single category.
+    bm = re.match(r"(choice|device_list|device|block)\s*\{(.*)\}$", dtype)
     if bm:
         dtype = bm.group(1)
         payload = bm.group(2)

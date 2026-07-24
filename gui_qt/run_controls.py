@@ -56,7 +56,7 @@ class RunControlBar(QtWidgets.QWidget):
         outer.setContentsMargins(0, 4, 0, 0)
         outer.setSpacing(4)
 
-        row = QtWidgets.QHBoxLayout()
+        self._row = row = QtWidgets.QHBoxLayout()
         self._stop_btn = QtWidgets.QPushButton("■  Stop run")
         self._stop_btn.setStyleSheet(_STOP_QSS)
         self._stop_btn.setMinimumHeight(S.px(30))
@@ -107,6 +107,15 @@ class RunControlBar(QtWidgets.QWidget):
         rlay.addStretch(1)
         self._recovery.setVisible(False)
         outer.addWidget(self._recovery)
+
+    def add_trailing_widget(self, widget: QtWidgets.QWidget) -> None:
+        """Insert `widget` into the top button row, just before Shutdown.
+
+        Used by the main window to place the BEAMMODE/TESTMODE toggle bar in
+        the same row as Stop run / Shut down kernel, rather than as its own
+        row underneath.
+        """
+        self._row.insertWidget(self._row.indexOf(self._shutdown_btn), widget)
 
     def _recovery_btn(self, label: str, command: str, tip: str) -> QtWidgets.QPushButton:
         btn = QtWidgets.QPushButton(label)
