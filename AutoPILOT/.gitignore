@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+
+# Draft plan files are generation output, not source -- never commit them.
+generated_plans/*
+!generated_plans/.gitkeep
+
+# Per-installation runtime preferences (chat colors/font/model/temperature,
+# optional Argo overrides) written by the settings dialog -- not source,
+# should not carry machine-specific state between checkouts.
+autopilot_settings.json
