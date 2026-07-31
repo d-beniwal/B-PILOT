@@ -1045,7 +1045,7 @@ def main() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Bluesky Data Viewer")
     S.set_scale(_config.get("ui_scale"))
-    S.apply_theme(app)
+    S.apply_theme(app, _config.get("theme"), _config.get("font_family"))
     win = ViewerWindow(load_defaults())
     # Never open larger than the screen.
     screen = app.primaryScreen()

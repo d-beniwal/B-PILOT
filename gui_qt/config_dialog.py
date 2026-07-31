@@ -743,16 +743,6 @@ class ConfigDialog(QtWidgets.QDialog):
         "pseudo_suspender": "Pseudo-suspenders",
     }
 
-    # One accent colour per category, used for the card's left bar, header text,
-    # and count badge so the five groups are told apart at a glance.
-    _SCAN_BLOCK_COLORS = {
-        "plan_opener": "#2e7d32",       # green
-        "per_step": "#1565c0",          # blue
-        "plan_closer": "#c85e00",       # accent orange (dark)
-        "suspender": "#6a1b9a",         # purple
-        "pseudo_suspender": "#8d6e00",  # mustard
-    }
-
     # Number of name "chips" laid out per row inside each category card.
     _SCAN_BLOCK_COLUMNS = 3
 
@@ -905,7 +895,7 @@ class ConfigDialog(QtWidgets.QDialog):
         self, category: str, names: list[str]
     ) -> QtWidgets.QWidget:
         """Build one colour-coded category card for the Scan blocks display."""
-        color = self._SCAN_BLOCK_COLORS.get(category, S.ACCENT)
+        color = S.SCAN_BLOCK_COLORS.get(category, S.ACCENT)
 
         frame = QtWidgets.QFrame()
         frame.setObjectName("scanBlockCard")
@@ -1019,6 +1009,31 @@ class ConfigDialog(QtWidgets.QDialog):
 
     def _build_appearance_card(self) -> QtWidgets.QWidget:
         card = S.make_card("Appearance")
+
+        theme_row = QtWidgets.QHBoxLayout()
+        theme_row.addWidget(S.LabelRight("Color theme:"))
+        self._theme = S.NoScrollComboBox()
+        for key, label in S.THEME_CHOICES:
+            self._theme.addItem(label, key)
+        self._theme.setToolTip(
+            "Color theme for the whole app. Takes effect on the next launch."
+        )
+        theme_row.addWidget(self._theme)
+        theme_row.addStretch(1)
+        card.body.addLayout(theme_row)
+
+        font_row = QtWidgets.QHBoxLayout()
+        font_row.addWidget(S.LabelRight("Font:"))
+        self._font_family = S.NoScrollComboBox()
+        for key, label in S.FONT_CHOICES:
+            self._font_family.addItem(label, key)
+        self._font_family.setToolTip(
+            "Font family for the whole app. Takes effect on the next launch."
+        )
+        font_row.addWidget(self._font_family)
+        font_row.addStretch(1)
+        card.body.addLayout(font_row)
+
         row = QtWidgets.QHBoxLayout()
         row.addWidget(S.LabelRight("UI scale:"))
         self._ui_scale = QtWidgets.QDoubleSpinBox()
@@ -1033,7 +1048,9 @@ class ConfigDialog(QtWidgets.QDialog):
         row.addWidget(self._ui_scale)
         row.addStretch(1)
         card.body.addLayout(row)
-        note = QtWidgets.QLabel("Restart B-PILOT for a scale change to take effect.")
+        note = QtWidgets.QLabel(
+            "Restart B-PILOT for a theme, font, or scale change to take effect."
+        )
         note.setStyleSheet(f"color: {S.MUTED};")
         card.body.addWidget(note)
         return card
@@ -1126,6 +1143,10 @@ class ConfigDialog(QtWidgets.QDialog):
         self._launch_script.setText(cfg["launch_script"])
         self._embedded_starter.setText(cfg["embedded_starter_script"])
 
+        theme_idx = self._theme.findData(cfg.get("theme", "light"))
+        self._theme.setCurrentIndex(theme_idx if theme_idx >= 0 else 0)
+        font_idx = self._font_family.findData(cfg.get("font_family", "system"))
+        self._font_family.setCurrentIndex(font_idx if font_idx >= 0 else 0)
         self._ui_scale.setValue(float(cfg["ui_scale"]))
         self._autopilot_enabled.setChecked(bool(cfg.get("autopilot_enabled", False)))
 
@@ -1169,6 +1190,8 @@ class ConfigDialog(QtWidgets.QDialog):
             "use_screen": self._use_screen.isChecked(),
             "launch_script": self._launch_script.text().strip(),
             "embedded_starter_script": self._embedded_starter.text().strip(),
+            "theme": self._theme.currentData(),
+            "font_family": self._font_family.currentData(),
             "ui_scale": self._ui_scale.value(),
             "autopilot_enabled": self._autopilot_enabled.isChecked(),
             "device_search_paths": [

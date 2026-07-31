@@ -23,14 +23,18 @@ from . import config
 from . import queue_store as qs
 from . import style as S
 
-# Status → colour.  Per request: DONE red, RUNNING green, WAITING orange;
-# ERROR gets a distinct purple so failures stand out from completed runs.
-_STATUS_COLOR = {
-    qs.WAITING: "#e69500",   # orange
-    qs.RUNNING: "#2e7d32",   # green
-    qs.DONE:    "#c62828",   # red
-    qs.ERROR:   "#7b1fa2",   # purple (distinct from done)
-}
+def _status_color() -> dict[str, str]:
+    """Status → colour, read from the live theme (per request: DONE red,
+    RUNNING green, WAITING orange; ERROR gets a distinct colour so failures
+    stand out from completed runs)."""
+    return {
+        qs.WAITING: S.STATUS_WAITING,
+        qs.RUNNING: S.STATUS_RUNNING,
+        qs.DONE:    S.STATUS_DONE,
+        qs.ERROR:   S.STATUS_ERROR,
+    }
+
+
 _STATE_LABEL = {qs.IDLE: "Idle", qs.S_RUNNING: "Running", qs.PAUSED: "Paused"}
 
 
@@ -232,7 +236,7 @@ class QueuePanel(QtWidgets.QWidget):
 
             status = QtWidgets.QTableWidgetItem(it["status"].upper())
             status.setForeground(
-                QtGui.QColor(_STATUS_COLOR.get(it["status"], S.TEXT))
+                QtGui.QColor(_status_color().get(it["status"], S.TEXT))
             )
             status.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
 

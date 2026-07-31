@@ -310,6 +310,8 @@ class MainWindow(QtWidgets.QMainWindow):
         from .config_dialog import ConfigDialog
 
         old_scale = config.get("ui_scale")
+        old_theme = config.get("theme")
+        old_font = config.get("font_family")
         dlg = ConfigDialog(self)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             # Re-scan the plan browser with the new files scope, and refresh
@@ -320,11 +322,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.runner.apply_config()
             self._sync_autopilot_dock()
             self._set_toolbar_status("Configuration saved.")
-            if config.get("ui_scale") != old_scale:
+            if (
+                config.get("ui_scale") != old_scale
+                or config.get("theme") != old_theme
+                or config.get("font_family") != old_font
+            ):
                 QtWidgets.QMessageBox.information(
                     self,
                     "Restart required",
-                    "Restart B-PILOT for the new UI scale to take effect.",
+                    "Restart B-PILOT for the new appearance settings to take effect.",
                 )
 
     def _sync_autopilot_dock(self) -> None:

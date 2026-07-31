@@ -96,6 +96,12 @@ DEFAULTS: dict = {
     # startup (see style.SCALE) — for high-DPI screens (e.g. 4K). Takes
     # effect on the next launch, not live.
     "ui_scale": 1.0,
+    # Color theme applied at startup (see style.THEMES / style.apply_theme).
+    # Takes effect on the next launch, not live -- same as ui_scale.
+    "theme": "light",
+    # UI font family (see style.FONT_STACKS), independent of the color theme.
+    # Takes effect on the next launch, not live -- same as ui_scale.
+    "font_family": "system",
     # Optional AutoPILOT chat dock (../AutoPILOT, see gui_qt/autopilot_bridge.py).
     # Off by default -- it's an add-on AI layer, not core B-PILOT -- toggled
     # from Configuration -> Appearance. Has no effect if AutoPILOT/ isn't

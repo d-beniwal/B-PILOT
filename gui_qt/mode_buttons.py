@@ -21,21 +21,15 @@ from . import style as S
 
 _POLL_MS = 2800
 
-_ON_QSS = (
-    f"QPushButton{{background:{S.CMD_RE};color:white;font-weight:bold;"
-    "border-radius:4px;padding:5px 12px;}"
-    "QPushButton:disabled{background:#e0e0e0;color:#9a9a9a;}"
-)
-_OFF_QSS = (
-    f"QPushButton{{background:{S.ERROR};color:white;font-weight:bold;"
-    "border-radius:4px;padding:5px 12px;}"
-    "QPushButton:disabled{background:#e0e0e0;color:#9a9a9a;}"
-)
-_UNKNOWN_QSS = (
-    f"QPushButton{{background:{S.MUTED};color:white;font-weight:bold;"
-    "border-radius:4px;padding:5px 12px;}"
-    "QPushButton:disabled{background:#e0e0e0;color:#9a9a9a;}"
-)
+
+def _mode_qss(bg: str) -> str:
+    """Build the state-colored QSS for a mode button, reading live theme tokens."""
+    return (
+        f"QPushButton{{background:{bg};color:white;font-weight:bold;"
+        f"border-radius:{S.px(4)}px;padding:{S.px(5)}px {S.px(12)}px;}}"
+        f"QPushButton:disabled{{background:{S.BUTTON_DISABLED_BG};color:{S.DISABLED_TEXT};}}"
+    )
+
 
 _NAMES = ("BEAMMODE", "TESTMODE")
 
@@ -110,7 +104,8 @@ class ModeButtonBar(QtWidgets.QWidget):
     def _apply_state(self, name: str, value) -> None:
         self._values[name] = value
         btn = self._buttons[name]
-        btn.setStyleSheet(_ON_QSS if value else (_OFF_QSS if value is False else _UNKNOWN_QSS))
+        bg = S.CMD_RE if value else (S.ERROR if value is False else S.MUTED)
+        btn.setStyleSheet(_mode_qss(bg))
 
     # ── Toggling ──────────────────────────────────────────────────────────────
 

@@ -1,8 +1,17 @@
-"""Light theme + layout helpers for the Qt plan-runner GUI.
+"""Switchable themes + layout helpers for the Qt plan-runner GUI.
 
-A clean light theme (soft-grey panels, dark text, orange accent, white input
-fields) plus small layout helpers.  Self-contained: the checkmark/arrow SVG
-helpers are copied in so this GUI does not depend on the midas package.
+Three built-in themes (Light, Dark, Slate) share one modern, flat QSS
+template (:func:`stylesheet`) and differ only in their color tokens (see
+:class:`Theme` / :data:`THEMES`). The checkmark/arrow SVG helpers are
+copied in so this GUI does not depend on the midas package.
+
+:func:`apply_theme` resolves the chosen theme and rebinds every existing
+module-level color constant (``BG``, ``ACCENT``, ``MUTED``, ...) to that
+theme's values, so the many call sites across ``gui_qt/`` that already read
+``style.MUTED`` / ``style.ACCENT`` / etc. pick up the active theme without
+any change. It must run once at startup, before any widget is built (see
+``config`` key ``"theme"``) — not live-updatable mid-session, same
+constraint as :func:`set_scale`.
 """
 # ruff: noqa: E501  (the QSS block below has long, readable one-line rules)
 from __future__ import annotations
@@ -10,31 +19,310 @@ from __future__ import annotations
 import atexit
 import os
 import tempfile
+from dataclasses import dataclass, field
 
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
-# ── Palette (light) ───────────────────────────────────────────────────────────
-BG        = "#e9e9e9"   # window background
-PANEL     = "#f6f6f6"   # raised card background
-INPUT_BG  = "#ffffff"   # white input fields
-INPUT_FG  = "#1a1a1a"
-TEXT      = "#202020"   # primary (dark) text
-MUTED     = "#6f6f6f"
-BORDER    = "#bcbcbc"
-HOVER     = "#8f8f8f"
-ACCENT    = "#ff7800"   # orange accent (selected / checked / primary)
-ACCENT_D  = "#c85e00"
-ERROR     = "#c62828"   # invalid-field border
+# ── Theme registry ──────────────────────────────────────────────────────────
 
-# Command-preview syntax colours.
-CMD_IMPORT = "#1565c0"  # the "from ... import ..." line (blue)
-CMD_RE     = "#2e7d32"  # the "RE(...)" line (green)
+
+@dataclass(frozen=True)
+class Theme:
+    """One named color palette. Every hardcoded color anywhere in gui_qt/
+    (the base QSS below, plus the small "shadow palettes" in
+    mode_buttons.py/run_controls.py/queue_panel.py/config_dialog.py) should
+    trace back to a field here so switching themes actually changes it."""
+
+    key: str
+    label: str
+    # Base surfaces / text.
+    bg: str          # window background
+    panel: str       # raised card background (QGroupBox, toolbar)
+    input_bg: str    # text fields, combo boxes, lists
+    input_fg: str
+    text: str        # primary text
+    muted: str       # secondary/hint text
+    border: str
+    hover: str       # generic hover border/outline
+    alt_row_bg: str  # alternating list/table rows
+    tooltip_bg: str
+    groupbox_title: str
+    # Accent + semantic status.
+    accent: str
+    accent_d: str    # darker accent (primary-button gradient/border)
+    error: str
+    success: str
+    warning: str
+    # Command-preview syntax colors.
+    cmd_import: str  # the "from ... import ..." line
+    cmd_re: str      # the "RE(...)" line
+    # Buttons (flat, no gradient).
+    button_bg: str
+    button_hover_bg: str
+    button_pressed_bg: str
+    button_disabled_bg: str
+    button_disabled_border: str
+    disabled_text: str
+    primary_hover_border: str
+    primary_disabled_bg: str
+    primary_disabled_border: str
+    # Scrollbars / splitter / lists.
+    scrollbar_bg: str
+    scrollbar_handle: str
+    scrollbar_handle_hover: str
+    splitter: str
+    list_hover_bg: str
+    # Queue status colors (queue_panel.py's per-item status column).
+    status_waiting: str
+    status_running: str
+    status_done: str
+    status_error: str
+    # Scan-block category colors (config_dialog.py's "Scan blocks" tab).
+    scan_block_colors: dict[str, str] = field(default_factory=dict)
+
+
+THEMES: dict[str, Theme] = {
+    "light": Theme(
+        key="light",
+        label="Light",
+        bg="#eef0f2",
+        panel="#ffffff",
+        input_bg="#ffffff",
+        input_fg="#1a1a1a",
+        text="#1f2328",
+        muted="#66707a",
+        border="#d7dbdf",
+        hover="#aeb4ba",
+        alt_row_bg="#f5f6f7",
+        tooltip_bg="#fffbe6",
+        groupbox_title="#3a3f45",
+        accent="#ff7800",
+        accent_d="#c85e00",
+        error="#c62828",
+        success="#2e7d32",
+        warning="#e69500",
+        cmd_import="#1565c0",
+        cmd_re="#2e7d32",
+        button_bg="#f7f8f9",
+        button_hover_bg="#eef0f2",
+        button_pressed_bg="#e2e5e8",
+        button_disabled_bg="#f0f1f2",
+        button_disabled_border="#dde0e3",
+        disabled_text="#9aa1a8",
+        primary_hover_border="#7a3a00",
+        primary_disabled_bg="#e4e6e8",
+        primary_disabled_border="#d0d3d6",
+        scrollbar_bg="#e6e8ea",
+        scrollbar_handle="#c3c8cd",
+        scrollbar_handle_hover="#a8aeb4",
+        splitter="#d7dbdf",
+        list_hover_bg="#fdeee0",
+        status_waiting="#e69500",
+        status_running="#2e7d32",
+        status_done="#c62828",
+        status_error="#7b1fa2",
+        scan_block_colors={
+            "plan_opener": "#2e7d32",
+            "per_step": "#1565c0",
+            "plan_closer": "#c85e00",
+            "suspender": "#6a1b9a",
+            "pseudo_suspender": "#8d6e00",
+        },
+    ),
+    "dark": Theme(
+        key="dark",
+        label="Dark",
+        bg="#1b1e23",
+        panel="#22262c",
+        input_bg="#2a2f37",
+        input_fg="#e6e9ec",
+        text="#e6e9ec",
+        muted="#9099a3",
+        border="#3a3f47",
+        hover="#4a5058",
+        alt_row_bg="#20242a",
+        tooltip_bg="#3a3520",
+        groupbox_title="#ffb877",
+        accent="#ff8c3a",
+        accent_d="#d97a2e",
+        error="#ff5252",
+        success="#4caf50",
+        warning="#ffb74d",
+        cmd_import="#64b5f6",
+        cmd_re="#81c784",
+        button_bg="#2a2f37",
+        button_hover_bg="#333944",
+        button_pressed_bg="#3d4550",
+        button_disabled_bg="#23262b",
+        button_disabled_border="#33373d",
+        disabled_text="#5c626a",
+        primary_hover_border="#ffa85c",
+        primary_disabled_bg="#33373d",
+        primary_disabled_border="#3a3f47",
+        scrollbar_bg="#20242a",
+        scrollbar_handle="#3e444c",
+        scrollbar_handle_hover="#4e555f",
+        splitter="#3a3f47",
+        list_hover_bg="#332a1e",
+        status_waiting="#ffb74d",
+        status_running="#66bb6a",
+        status_done="#ef5350",
+        status_error="#ba68c8",
+        scan_block_colors={
+            "plan_opener": "#66bb6a",
+            "per_step": "#64b5f6",
+            "plan_closer": "#ffa85c",
+            "suspender": "#ba68c8",
+            "pseudo_suspender": "#d4b106",
+        },
+    ),
+    "slate": Theme(
+        key="slate",
+        label="Slate",
+        bg="#232a33",
+        panel="#2b3440",
+        input_bg="#1f252d",
+        input_fg="#dde3ea",
+        text="#dde3ea",
+        muted="#8793a1",
+        border="#3c4654",
+        hover="#4c5866",
+        alt_row_bg="#28303a",
+        tooltip_bg="#33404f",
+        groupbox_title="#8fc4ff",
+        accent="#4fa8ff",
+        accent_d="#2f7fcf",
+        error="#ff6b6b",
+        success="#4fd18b",
+        warning="#ffcc66",
+        cmd_import="#7ec8ff",
+        cmd_re="#7de3a8",
+        button_bg="#2b3440",
+        button_hover_bg="#344052",
+        button_pressed_bg="#3c4a5e",
+        button_disabled_bg="#252d36",
+        button_disabled_border="#37404c",
+        disabled_text="#5e6a78",
+        primary_hover_border="#7ec8ff",
+        primary_disabled_bg="#2f3946",
+        primary_disabled_border="#3c4654",
+        scrollbar_bg="#28303a",
+        scrollbar_handle="#3f4a58",
+        scrollbar_handle_hover="#51606f",
+        splitter="#3c4654",
+        list_hover_bg="#2e3d4d",
+        status_waiting="#ffcc66",
+        status_running="#4fd18b",
+        status_done="#ff6b6b",
+        status_error="#c792ea",
+        scan_block_colors={
+            "plan_opener": "#4fd18b",
+            "per_step": "#4fa8ff",
+            "plan_closer": "#ffcc66",
+            "suspender": "#c792ea",
+            "pseudo_suspender": "#e0c341",
+        },
+    ),
+}
+
+THEME_CHOICES: list[tuple[str, str]] = [(t.key, t.label) for t in THEMES.values()]
+
+DEFAULT_THEME_KEY = "light"
+
+
+def resolve(theme_key: str | None) -> Theme:
+    """Look up a theme by key, falling back to the default for an unknown/missing key."""
+    return THEMES.get(theme_key or "", THEMES[DEFAULT_THEME_KEY])
+
 
 # Fixed-width font stack. Naming real per-platform families (rather than the
-# generic "monospace") lets Qt resolve immediately.
+# generic "monospace") lets Qt resolve immediately. Theme-independent.
 MONO_FAMILIES = ["Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"]
 MONO_CSS = ", ".join(f'"{f}"' if " " in f else f for f in MONO_FAMILIES)
+
+# ── UI font family (independent of color theme — any theme x any font) ──────
+# Each value is a QSS font-family fallback chain: Qt tries each name in order
+# and falls back to the generic keyword at the end if none are installed, so
+# an aspirational family (e.g. "Inter") is harmless on a machine without it.
+FONT_STACKS: dict[str, str] = {
+    "system": "",  # don't set font-family at all — inherit the OS/Qt default
+    "sans": '"Helvetica Neue", "Segoe UI", "Inter", "DejaVu Sans", Arial, sans-serif',
+    "serif": 'Georgia, "Times New Roman", "DejaVu Serif", serif',
+    "rounded": '"Avenir Next", "Century Gothic", Verdana, "DejaVu Sans", sans-serif',
+    "mono_ui": MONO_CSS,  # whole UI in the fixed-width font, not just code boxes
+}
+FONT_LABELS: dict[str, str] = {
+    "system": "System Default",
+    "sans": "Modern Sans",
+    "serif": "Classic Serif",
+    "rounded": "Rounded Sans",
+    "mono_ui": "Monospace (whole UI)",
+}
+FONT_CHOICES: list[tuple[str, str]] = [(k, FONT_LABELS[k]) for k in FONT_STACKS]
+
+DEFAULT_FONT_KEY = "system"
+
+
+def resolve_font(font_key: str | None) -> str:
+    """Look up a font stack's CSS by key, falling back to the default for an
+    unknown/missing key. Returns the font-family CSS value (may be "")."""
+    return FONT_STACKS.get(font_key or "", FONT_STACKS[DEFAULT_FONT_KEY])
+
+
+FONT_FAMILY_CSS = resolve_font(DEFAULT_FONT_KEY)
+
+
+def _rebind_globals(theme: Theme) -> None:
+    """Rebind every module-level color constant to `theme`'s values.
+
+    Lets every existing ``style.ATTR``/``S.ATTR`` call site across gui_qt/
+    keep working unchanged when the active theme changes — they read the
+    module attribute at call time, and widget construction always happens
+    after :func:`apply_theme` has run (see the module docstring).
+    """
+    global CURRENT_THEME
+    global BG, PANEL, INPUT_BG, INPUT_FG, TEXT, MUTED, BORDER, HOVER
+    global ALT_ROW_BG, TOOLTIP_BG, GROUPBOX_TITLE
+    global ACCENT, ACCENT_D, ERROR, SUCCESS, WARNING
+    global CMD_IMPORT, CMD_RE
+    global BUTTON_BG, BUTTON_HOVER_BG, BUTTON_PRESSED_BG
+    global BUTTON_DISABLED_BG, BUTTON_DISABLED_BORDER, DISABLED_TEXT
+    global PRIMARY_HOVER_BORDER, PRIMARY_DISABLED_BG, PRIMARY_DISABLED_BORDER
+    global SCROLLBAR_BG, SCROLLBAR_HANDLE, SCROLLBAR_HANDLE_HOVER
+    global SPLITTER, LIST_HOVER_BG
+    global STATUS_WAITING, STATUS_RUNNING, STATUS_DONE, STATUS_ERROR
+    global SCAN_BLOCK_COLORS
+
+    CURRENT_THEME = theme
+    BG, PANEL, INPUT_BG, INPUT_FG = theme.bg, theme.panel, theme.input_bg, theme.input_fg
+    TEXT, MUTED, BORDER, HOVER = theme.text, theme.muted, theme.border, theme.hover
+    ALT_ROW_BG, TOOLTIP_BG, GROUPBOX_TITLE = theme.alt_row_bg, theme.tooltip_bg, theme.groupbox_title
+    ACCENT, ACCENT_D, ERROR = theme.accent, theme.accent_d, theme.error
+    SUCCESS, WARNING = theme.success, theme.warning
+    CMD_IMPORT, CMD_RE = theme.cmd_import, theme.cmd_re
+    BUTTON_BG, BUTTON_HOVER_BG, BUTTON_PRESSED_BG = (
+        theme.button_bg, theme.button_hover_bg, theme.button_pressed_bg,
+    )
+    BUTTON_DISABLED_BG, BUTTON_DISABLED_BORDER = theme.button_disabled_bg, theme.button_disabled_border
+    DISABLED_TEXT = theme.disabled_text
+    PRIMARY_HOVER_BORDER = theme.primary_hover_border
+    PRIMARY_DISABLED_BG, PRIMARY_DISABLED_BORDER = (
+        theme.primary_disabled_bg, theme.primary_disabled_border,
+    )
+    SCROLLBAR_BG, SCROLLBAR_HANDLE, SCROLLBAR_HANDLE_HOVER = (
+        theme.scrollbar_bg, theme.scrollbar_handle, theme.scrollbar_handle_hover,
+    )
+    SPLITTER, LIST_HOVER_BG = theme.splitter, theme.list_hover_bg
+    STATUS_WAITING, STATUS_RUNNING, STATUS_DONE, STATUS_ERROR = (
+        theme.status_waiting, theme.status_running, theme.status_done, theme.status_error,
+    )
+    SCAN_BLOCK_COLORS = dict(theme.scan_block_colors)
+
+
+# Sane defaults so anything importing style.py before apply_theme() runs
+# (e.g. a standalone script) still sees a fully-populated light theme.
+_rebind_globals(THEMES[DEFAULT_THEME_KEY])
 
 # ── UI scale ────────────────────────────────────────────────────────────────
 # Single multiplier applied to every hard-coded font/widget/window pixel size
@@ -52,6 +340,25 @@ def set_scale(factor: float) -> None:
 def px(n: int | float) -> int:
     """Scale a pixel literal by the current :data:`SCALE`."""
     return round(n * SCALE)
+
+
+def darken(hex_color: str, factor: int = 130) -> str:
+    """Darken a "#rrggbb" color (`factor` > 100 = darker; Qt's own scale).
+
+    Lets "shadow palette" files (mode buttons, stop button, ...) derive
+    hover/pressed variants from a single theme token instead of hardcoding
+    their own hex shades that would go stale under a different theme.
+    """
+    from PyQt5 import QtGui
+
+    return QtGui.QColor(hex_color).darker(factor).name()
+
+
+def lighten(hex_color: str, factor: int = 130) -> str:
+    """Lighten a "#rrggbb" color (`factor` > 100 = lighter; Qt's own scale)."""
+    from PyQt5 import QtGui
+
+    return QtGui.QColor(hex_color).lighter(factor).name()
 
 
 # ── SVG glyphs for QSS sub-controls ────────────────────────────────────────────
@@ -85,134 +392,157 @@ def _make_arrow_svg(direction: str = "down", color: str = "#444444") -> str:
     return f.name.replace("\\", "/")
 
 
-def stylesheet(checkmark_svg: str, up_arrow_svg: str = "", down_arrow_svg: str = "") -> str:
-    """Return the full application QSS (light theme), scaled by :data:`SCALE`."""
+def stylesheet(
+    theme: Theme,
+    checkmark_svg: str,
+    up_arrow_svg: str = "",
+    down_arrow_svg: str = "",
+    font_family: str = "",
+) -> str:
+    """Return the full application QSS for `theme`, scaled by :data:`SCALE`.
+
+    `font_family` is a QSS font-family value (see :data:`FONT_STACKS`); an
+    empty string omits the rule entirely so the OS/Qt default font is used.
+    """
+    t = theme
+    font_rule = f"font-family: {font_family};" if font_family else ""
     return f"""
-    QWidget {{ color: {TEXT}; font-size: {px(12)}px; }}
-    QMainWindow, QScrollArea, QSplitter {{ background: {BG}; }}
+    QWidget {{ color: {t.text}; font-size: {px(12)}px; {font_rule} }}
+    QMainWindow, QScrollArea, QSplitter {{ background: {t.bg}; }}
     QScrollArea {{ border: none; }}
-    QToolTip {{ background: #fffbe6; color: {TEXT}; border: 1px solid {BORDER}; padding: {px(3)}px; }}
+    QToolTip {{
+        background: {t.tooltip_bg}; color: {t.text}; border: 1px solid {t.border};
+        border-radius: {px(4)}px; padding: {px(4)}px {px(6)}px;
+    }}
 
     /* ── Context menus ─────────────────────────────────────────── */
-    QMenu {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER}; }}
-    QMenu::item {{ padding: {px(4)}px {px(22)}px; background: transparent; }}
-    QMenu::item:selected {{ background: {ACCENT}; color: white; }}
-    QMenu::item:disabled {{ color: {MUTED}; }}
-    QMenu::separator {{ height: {px(1)}px; background: {BORDER}; margin: {px(3)}px {px(6)}px; }}
-    QMenuBar {{ background: {BG}; color: {TEXT}; }}
-    QMenuBar::item:selected {{ background: {ACCENT}; color: white; }}
+    QMenu {{ background: {t.panel}; color: {t.text}; border: 1px solid {t.border}; border-radius: {px(6)}px; }}
+    QMenu::item {{ padding: {px(5)}px {px(22)}px; background: transparent; border-radius: {px(4)}px; }}
+    QMenu::item:selected {{ background: {t.accent}; color: white; }}
+    QMenu::item:disabled {{ color: {t.muted}; }}
+    QMenu::separator {{ height: {px(1)}px; background: {t.border}; margin: {px(4)}px {px(6)}px; }}
+    QMenuBar {{ background: {t.bg}; color: {t.text}; }}
+    QMenuBar::item:selected {{ background: {t.accent}; color: white; border-radius: {px(4)}px; }}
 
     /* ── Top toolbar ───────────────────────────────────────────── */
-    QFrame#toolbar {{ background: {PANEL}; border-bottom: 1px solid {BORDER}; }}
+    QFrame#toolbar {{ background: {t.panel}; border-bottom: 1px solid {t.border}; }}
 
     /* ── Section cards ─────────────────────────────────────────── */
     QGroupBox {{
-        border: 1px solid {BORDER};
-        border-radius: {px(5)}px;
-        margin-top: {px(9)}px;
-        padding: {px(6)}px {px(4)}px {px(4)}px {px(4)}px;
-        background: {PANEL};
+        border: 1px solid {t.border};
+        border-radius: {px(8)}px;
+        margin-top: {px(10)}px;
+        padding: {px(8)}px {px(6)}px {px(6)}px {px(6)}px;
+        background: {t.panel};
     }}
     QGroupBox::title {{
         subcontrol-origin: margin;
         subcontrol-position: top left;
         left: {px(10)}px;
-        padding: 0 {px(4)}px;
-        color: #3a3a3a;
-        font-weight: bold;
+        padding: 0 {px(5)}px;
+        color: {t.groupbox_title};
+        font-weight: 600;
     }}
     QGroupBox::indicator {{ width: {px(14)}px; height: {px(14)}px; }}
 
-    /* ── Buttons ──────────────────────────────────────────────── */
+    /* ── Buttons (flat, modern) ───────────────────────────────── */
     QPushButton {{
-        color: {TEXT};
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fdfdfd, stop:1 #e6e6e6);
-        border: 1px solid {BORDER};
-        border-radius: {px(4)}px;
-        padding: {px(4)}px {px(10)}px;
+        color: {t.text};
+        background: {t.button_bg};
+        border: 1px solid {t.border};
+        border-radius: {px(6)}px;
+        padding: {px(5)}px {px(12)}px;
         min-height: {px(18)}px;
     }}
-    QPushButton:hover {{ border: 1px solid {HOVER}; }}
-    QPushButton:pressed {{ background: #dcdcdc; }}
-    QPushButton:disabled {{ color: {MUTED}; background: #ededed; border-color: #d0d0d0; }}
+    QPushButton:hover {{ background: {t.button_hover_bg}; border-color: {t.hover}; }}
+    QPushButton:pressed {{ background: {t.button_pressed_bg}; }}
+    QPushButton:disabled {{ color: {t.disabled_text}; background: {t.button_disabled_bg}; border-color: {t.button_disabled_border}; }}
     QPushButton#primary {{
-        color: white; font-weight: bold;
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_D});
-        border: 1px solid {ACCENT_D};
+        color: white; font-weight: 600;
+        background: {t.accent};
+        border: 1px solid {t.accent_d};
     }}
-    QPushButton#primary:hover {{ border: 1px solid #7a3a00; }}
-    QPushButton#primary:disabled {{ background: #d9d9d9; color: {MUTED}; border-color: #cccccc; }}
+    QPushButton#primary:hover {{ background: {t.accent_d}; border-color: {t.primary_hover_border}; }}
+    QPushButton#primary:pressed {{ background: {t.accent_d}; }}
+    QPushButton#primary:disabled {{ background: {t.primary_disabled_bg}; color: {t.disabled_text}; border-color: {t.primary_disabled_border}; }}
 
-    /* ── Inputs (white fields) ────────────────────────────────── */
+    /* ── Inputs ───────────────────────────────────────────────── */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {{
-        background: {INPUT_BG}; color: {INPUT_FG};
-        border: 1px solid {BORDER}; border-radius: {px(3)}px;
-        selection-background-color: {ACCENT}; selection-color: white;
-        min-height: {px(18)}px; padding: {px(1)}px {px(3)}px;
+        background: {t.input_bg}; color: {t.input_fg};
+        border: 1px solid {t.border}; border-radius: {px(6)}px;
+        selection-background-color: {t.accent}; selection-color: white;
+        min-height: {px(18)}px; padding: {px(2)}px {px(6)}px;
     }}
-    QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}
+    QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+        border: {px(2)}px solid {t.accent};
+    }}
     QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{
-        background: #e6e6e6; color: #9a9a9a;
+        background: {t.button_disabled_bg}; color: {t.disabled_text};
     }}
     /* Invalid fields (datatype / required check) get a red border. */
     QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"], QComboBox[invalid="true"] {{
-        border: {px(2)}px solid {ERROR};
+        border: {px(2)}px solid {t.error};
     }}
     QComboBox::drop-down {{
         subcontrol-origin: padding; subcontrol-position: center right;
-        width: {px(18)}px; border-left: 1px solid {BORDER};
+        width: {px(20)}px; border-left: 1px solid {t.border};
     }}
     QComboBox::down-arrow {{ image: url({down_arrow_svg}); width: {px(9)}px; height: {px(9)}px; }}
     QComboBox QAbstractItemView {{
-        background: {INPUT_BG}; color: {INPUT_FG};
-        selection-background-color: {ACCENT}; selection-color: white;
-        border: 1px solid {BORDER}; outline: 0;
+        background: {t.input_bg}; color: {t.input_fg};
+        selection-background-color: {t.accent}; selection-color: white;
+        border: 1px solid {t.border}; border-radius: {px(6)}px; outline: 0;
     }}
-    QComboBox:disabled {{ background: #e6e6e6; }}
+    QComboBox:disabled {{ background: {t.button_disabled_bg}; }}
 
     /* Monospace boxes (command display, positions, notes). */
     QPlainTextEdit#mono, QTextEdit#mono {{
-        background: #fbfbfb; color: {INPUT_FG}; font-family: {MONO_CSS};
+        background: {t.input_bg}; color: {t.input_fg}; font-family: {MONO_CSS};
     }}
 
-    /* ── Checkboxes / radios (orange when on) ─────────────────── */
-    QCheckBox, QRadioButton {{ color: {TEXT}; spacing: {px(6)}px; background: transparent; }}
+    /* ── Checkboxes / radios (accent when on) ──────────────────── */
+    QCheckBox, QRadioButton {{ color: {t.text}; spacing: {px(6)}px; background: transparent; }}
     QCheckBox::indicator, QRadioButton::indicator {{
-        width: {px(14)}px; height: {px(14)}px;
-        border: 1px solid #9a9a9a; background: #ffffff;
+        width: {px(15)}px; height: {px(15)}px;
+        border: 1px solid {t.hover}; background: {t.input_bg};
     }}
-    QCheckBox::indicator {{ border-radius: {px(3)}px; }}
-    QRadioButton::indicator {{ border-radius: {px(7)}px; }}
-    QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {ACCENT}; }}
+    QCheckBox::indicator {{ border-radius: {px(4)}px; }}
+    QRadioButton::indicator {{ border-radius: {px(8)}px; }}
+    QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {t.accent}; }}
     QCheckBox::indicator:checked {{
-        background: {ACCENT}; border-color: {ACCENT}; image: url({checkmark_svg});
+        background: {t.accent}; border-color: {t.accent}; image: url({checkmark_svg});
     }}
-    QRadioButton::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+    QRadioButton::indicator:checked {{ background: {t.accent}; border-color: {t.accent}; }}
 
     /* ── Item views (lists, trees, file dialogs) ──────────────── */
     QTreeView, QListView, QListWidget, QColumnView, QTableView {{
-        background: {INPUT_BG}; color: {INPUT_FG};
-        alternate-background-color: #f2f2f2;
-        selection-background-color: {ACCENT}; selection-color: white;
-        border: 1px solid {BORDER}; outline: 0;
+        background: {t.input_bg}; color: {t.input_fg};
+        alternate-background-color: {t.alt_row_bg};
+        selection-background-color: {t.accent}; selection-color: white;
+        border: 1px solid {t.border}; border-radius: {px(6)}px; outline: 0;
     }}
-    QListWidget::item:hover, QTreeView::item:hover {{ background: #f0e0d0; }}
+    QListWidget::item:hover, QTreeView::item:hover {{ background: {t.list_hover_bg}; }}
     QListWidget::item:selected, QTreeView::item:selected {{
-        background: {ACCENT}; color: white;
+        background: {t.accent}; color: white;
+    }}
+    QHeaderView::section {{
+        background: {t.panel}; color: {t.muted}; border: none;
+        border-bottom: 1px solid {t.border}; padding: {px(4)}px {px(6)}px;
     }}
 
     /* ── Scrollbars / splitter / status bar ───────────────────── */
-    QScrollBar:vertical {{ background: #e2e2e2; width: {px(11)}px; margin: 0; border: none; }}
-    QScrollBar::handle:vertical {{ background: #bcbcbc; border-radius: {px(5)}px; min-height: {px(24)}px; }}
-    QScrollBar::handle:vertical:hover {{ background: #a2a2a2; }}
+    QScrollBar:vertical {{ background: {t.scrollbar_bg}; width: {px(11)}px; margin: 0; border: none; }}
+    QScrollBar::handle:vertical {{ background: {t.scrollbar_handle}; border-radius: {px(5)}px; min-height: {px(24)}px; }}
+    QScrollBar::handle:vertical:hover {{ background: {t.scrollbar_handle_hover}; }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
-    QScrollBar:horizontal {{ background: #e2e2e2; height: {px(11)}px; margin: 0; border: none; }}
-    QScrollBar::handle:horizontal {{ background: #bcbcbc; border-radius: {px(5)}px; min-width: {px(24)}px; }}
+    QScrollBar:horizontal {{ background: {t.scrollbar_bg}; height: {px(11)}px; margin: 0; border: none; }}
+    QScrollBar::handle:horizontal {{ background: {t.scrollbar_handle}; border-radius: {px(5)}px; min-width: {px(24)}px; }}
+    QScrollBar::handle:horizontal:hover {{ background: {t.scrollbar_handle_hover}; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
-    QSplitter::handle {{ background: #d3d3d3; }}
-    QSplitter::handle:hover {{ background: {BORDER}; }}
-    QStatusBar {{ color: {MUTED}; }}
+    QSplitter::handle {{ background: {t.splitter}; }}
+    QSplitter::handle:hover {{ background: {t.hover}; }}
+    QStatusBar {{ color: {t.muted}; }}
     """
 
 
@@ -251,7 +581,7 @@ def make_card(title: str) -> QtWidgets.QGroupBox:
 
 
 def primary_btn(text: str) -> QtWidgets.QPushButton:
-    """A prominent accent (orange) action button."""
+    """A prominent accent action button."""
     b = QtWidgets.QPushButton(text)
     b.setObjectName("primary")
     b.setMinimumHeight(px(32))
@@ -312,8 +642,8 @@ class HoverTip(QtCore.QObject):
         tip.setWordWrap(True)
         tip.setMaximumWidth(px(440))
         tip.setStyleSheet(
-            f"background: #fffbe6; color: {TEXT}; "
-            f"border: 1px solid {BORDER}; padding: 5px;"
+            f"background: {TOOLTIP_BG}; color: {TEXT}; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; padding: 5px;"
         )
         tip.move(pos)
         tip.show()
@@ -335,27 +665,43 @@ def mark_invalid(widget: QtWidgets.QWidget, invalid: bool) -> None:
     widget.style().polish(widget)
 
 
-def apply_theme(app: QtWidgets.QApplication) -> None:
-    """Set Fusion + the light palette + the application stylesheet on `app`."""
+def apply_theme(
+    app: QtWidgets.QApplication,
+    theme_key: str | None = None,
+    font_key: str | None = None,
+) -> None:
+    """Set Fusion + the chosen theme's palette + font + application stylesheet on `app`."""
     from PyQt5 import QtGui
+
+    global FONT_FAMILY_CSS
+
+    theme = resolve(theme_key)
+    _rebind_globals(theme)
+    FONT_FAMILY_CSS = resolve_font(font_key)
 
     app.setStyle("Fusion")
     pal = QtGui.QPalette()
     for role, col in [
-        (QtGui.QPalette.Window,          BG),
-        (QtGui.QPalette.WindowText,      TEXT),
-        (QtGui.QPalette.Base,            INPUT_BG),
-        (QtGui.QPalette.AlternateBase,   "#f0f0f0"),
-        (QtGui.QPalette.Text,            INPUT_FG),
-        (QtGui.QPalette.Button,          "#e6e6e6"),
-        (QtGui.QPalette.ButtonText,      TEXT),
-        (QtGui.QPalette.Highlight,       ACCENT),
+        (QtGui.QPalette.Window,          theme.bg),
+        (QtGui.QPalette.WindowText,      theme.text),
+        (QtGui.QPalette.Base,            theme.input_bg),
+        (QtGui.QPalette.AlternateBase,   theme.alt_row_bg),
+        (QtGui.QPalette.Text,            theme.input_fg),
+        (QtGui.QPalette.Button,          theme.button_bg),
+        (QtGui.QPalette.ButtonText,      theme.text),
+        (QtGui.QPalette.Highlight,       theme.accent),
         (QtGui.QPalette.HighlightedText, "#ffffff"),
-        (QtGui.QPalette.ToolTipBase,     "#fffbe6"),
-        (QtGui.QPalette.ToolTipText,     TEXT),
+        (QtGui.QPalette.ToolTipBase,     theme.tooltip_bg),
+        (QtGui.QPalette.ToolTipText,     theme.text),
     ]:
         pal.setColor(role, QtGui.QColor(col))
     app.setPalette(pal)
     app.setStyleSheet(
-        stylesheet(_make_checkmark_svg(), _make_arrow_svg("up"), _make_arrow_svg("down"))
+        stylesheet(
+            theme,
+            _make_checkmark_svg(),
+            _make_arrow_svg("up", theme.text),
+            _make_arrow_svg("down", theme.text),
+            FONT_FAMILY_CSS,
+        )
     )

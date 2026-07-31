@@ -86,7 +86,7 @@ def main() -> None:
         from gui_qt.main_window import MainWindow
 
     S.set_scale(config.get("ui_scale"))
-    S.apply_theme(app)
+    S.apply_theme(app, config.get("theme"), config.get("font_family"))
 
     win = MainWindow()
     # On Cmd-Q / app quit, keep or kill the kernel per the keep_kernel_on_exit

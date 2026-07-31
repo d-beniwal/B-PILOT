@@ -22,13 +22,18 @@ from . import style as S
 
 _HOLD_MS = 1000  # press-and-hold threshold for a hard (immediate) halt
 
-_STOP_QSS = (
-    "QPushButton{background:#c62828;color:white;font-weight:bold;"
-    "border:1px solid #8e1c1c;border-radius:4px;padding:5px 12px;}"
-    "QPushButton:hover{background:#b71c1c;}"
-    "QPushButton:pressed{background:#8e1c1c;}"
-    "QPushButton:disabled{background:#e0e0e0;color:#9a9a9a;border-color:#cccccc;}"
-)
+
+def _stop_qss() -> str:
+    """Build the Stop-run button's QSS from the live theme's error color."""
+    border = S.darken(S.ERROR, 130)
+    return (
+        f"QPushButton{{background:{S.ERROR};color:white;font-weight:bold;"
+        f"border:1px solid {border};border-radius:{S.px(4)}px;padding:{S.px(5)}px {S.px(12)}px;}}"
+        f"QPushButton:hover{{background:{S.darken(S.ERROR, 110)};}}"
+        f"QPushButton:pressed{{background:{border};}}"
+        f"QPushButton:disabled{{background:{S.BUTTON_DISABLED_BG};color:{S.DISABLED_TEXT};"
+        f"border-color:{S.BUTTON_DISABLED_BORDER};}}"
+    )
 
 
 class RunControlBar(QtWidgets.QWidget):
@@ -58,7 +63,7 @@ class RunControlBar(QtWidgets.QWidget):
 
         self._row = row = QtWidgets.QHBoxLayout()
         self._stop_btn = QtWidgets.QPushButton("■  Stop run")
-        self._stop_btn.setStyleSheet(_STOP_QSS)
+        self._stop_btn.setStyleSheet(_stop_qss())
         self._stop_btn.setMinimumHeight(S.px(30))
         self._stop_btn.setToolTip(
             "Click = pause at the next checkpoint (Ctrl+C once).\n"
