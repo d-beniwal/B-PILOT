@@ -62,6 +62,20 @@ def _default_code(spec, value) -> str:
     return repr(value)
 
 
+def _signature_default_code(spec, value) -> str:
+    """Like `_default_code`, except a `device_list` param defaults to `None`
+    in a *function signature* -- a literal list there would be Python's
+    classic mutable-default-argument footgun, evaluated once at def time and
+    shared across every call. `render()` pairs this with a body-line guard
+    that rebuilds the real default list fresh on each call instead. Only
+    `render()`'s signature line needs this; `render_command()` builds a call
+    expression, not a signature, so `_default_code` is safe there as-is.
+    """
+    if spec.dtype == "device_list":
+        return "None"
+    return _default_code(spec, value)
+
+
 def _device_names_used(template: Template, clean: dict) -> list[str]:
     names: list[str] = []
     for spec in template.param_specs:
@@ -91,11 +105,15 @@ def render(template: Template, clean: dict, catalog: DeviceCatalog, summary: str
 
     sig_lines = []
     doc_lines = []
+    guard_lines = []
     for spec in template.param_specs:
-        sig_lines.append(f"    {spec.name}={_default_code(spec, clean.get(spec.name))},")
+        sig_lines.append(f"    {spec.name}={_signature_default_code(spec, clean.get(spec.name))},")
         doc_lines.append(f"    {spec.name} : {_typespec(spec)}")
         doc_lines.append(f"        {spec.short} :: {spec.long}")
         doc_lines.append("")
+        if spec.dtype == "device_list":
+            default_literal = _default_code(spec, clean.get(spec.name))
+            guard_lines.append(f"    {spec.name} = list({spec.name}) if {spec.name} else {default_literal}")
 
     slug = clean.get("motor") or (clean.get("scalers") or [None])[0] or template.wrapper_name_hint
     func_name = f"autopilot_{template.wrapper_name_hint}_{_slug(str(slug))}"
@@ -117,6 +135,7 @@ def render(template: Template, clean: dict, catalog: DeviceCatalog, summary: str
         "    ----------",
         *doc_lines,
         '    """',
+        *guard_lines,
         _CALL_BODY[template.key].rstrip("\n"),
         "",
     ]

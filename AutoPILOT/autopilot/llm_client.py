@@ -66,10 +66,16 @@ class ArgoClient:
 
         `temperature` is only sent when explicitly given -- the Anthropic API's
         own default otherwise applies.
+
+        On some models (e.g. claude-sonnet-5 via this Argo proxy), a turn can
+        spend its entire token budget on an opaque extended-thinking block,
+        stopping at `stop_reason == "max_tokens"` with no visible text or
+        tool_use at all -- the caller would then see a blank reply. Detect
+        that and retry once with a larger budget before giving up.
         """
         kwargs = dict(
             model=self.model,
-            max_tokens=1024,
+            max_tokens=4096,
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=messages,
             tools=tools,
@@ -77,6 +83,14 @@ class ArgoClient:
         )
         if temperature is not None:
             kwargs["temperature"] = temperature
+        resp = self._create(kwargs)
+        if resp.stop_reason == "max_tokens" and not any(
+            block.type in ("text", "tool_use") for block in resp.content
+        ):
+            resp = self._create({**kwargs, "max_tokens": 8192})
+        return resp
+
+    def _create(self, kwargs: dict):
         try:
             return self._client.messages.create(**kwargs)
         except BadRequestError as exc:
@@ -85,6 +99,6 @@ class ArgoClient:
             # than just ignoring it -- retry once without it instead of
             # failing every request for any model that doesn't support it.
             if "temperature" in kwargs and "temperature" in str(exc).lower():
-                kwargs.pop("temperature")
+                kwargs = {k: v for k, v in kwargs.items() if k != "temperature"}
                 return self._client.messages.create(**kwargs)
             raise

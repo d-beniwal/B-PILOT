@@ -11,3 +11,7 @@ generated_plans/*
 # optional Argo overrides) written by the settings dialog -- not source,
 # should not carry machine-specific state between checkouts.
 autopilot_settings.json
+
+# Eval/fine-tuning fixture for the chat-dock pipeline -- a growing scratch
+# set of test prompts, not source; keep it local rather than committing it.
+prompts_cache/
