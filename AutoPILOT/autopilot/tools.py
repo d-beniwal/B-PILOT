@@ -9,15 +9,25 @@ instead of confidently guessing when it isn't sure.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from .device_catalog import DeviceCatalog
 from .plan_catalog import PlanInfo
 from .plan_context import TEMPLATES
+from ._bpilot_path import ensure_bpilot_on_path
+
+ensure_bpilot_on_path()
+
+from gui_qt import paths as bpilot_paths  # noqa: E402
+from gui_qt import plan_parser as bpilot_plan_parser  # noqa: E402
 
 LIST_DEVICES_TOOL_NAME = "list_devices"
 LIST_PLANS_TOOL_NAME = "list_plans"
 LIST_ALL_PLANS_TOOL_NAME = "list_all_plans"
 DESCRIBE_PLAN_TOOL_NAME = "describe_plan"
 LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME = "list_scan_building_blocks"
+READ_PLAN_FILE_TOOL_NAME = "read_plan_file"
+VALIDATE_DOCSTRING_TOOL_NAME = "validate_docstring"
 
 
 def build_list_devices_schema() -> dict:
@@ -206,3 +216,110 @@ def describe_plan(plan_catalog: list[PlanInfo], name: str) -> dict:
 
 def list_scan_building_blocks(blocks: dict) -> dict:
     return blocks
+
+
+def build_read_plan_file_schema() -> dict:
+    return {
+        "name": READ_PLAN_FILE_TOOL_NAME,
+        "description": (
+            "Read a Python file of bluesky plan functions and report each "
+            "plan's real signature (every argument name/default) and its "
+            "current docstring (verbatim, or null if missing), plus whether "
+            "it already parses as B-PILOT-compliant. Use this before "
+            "drafting or fixing a docstring for a real file -- never invent "
+            "a function's signature or guess at its existing docstring. "
+            "Path must be a .py file inside instrument/plans/; files "
+            "elsewhere (e.g. iconfig.yml) cannot be read with this tool."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the .py file, absolute or relative to instrument/plans/.",
+                }
+            },
+            "required": ["path"],
+        },
+    }
+
+
+def build_validate_docstring_schema() -> dict:
+    return {
+        "name": VALIDATE_DOCSTRING_TOOL_NAME,
+        "description": (
+            "Check one or more drafted docstrings against B-PILOT's exact "
+            "parameter grammar before presenting them -- catches unknown "
+            "dtypes, a documented parameter name that doesn't match the "
+            "real signature, and a missing short/long ' :: ' split. Call "
+            "this on every docstring you draft for a real file before your "
+            "final reply, and fix and re-check anything it flags."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "drafts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "function_name": {"type": "string"},
+                            "arg_names": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Every real argument name from the function's signature (from read_plan_file), in any order.",
+                            },
+                            "docstring": {
+                                "type": "string",
+                                "description": "The full drafted docstring text (opening summary paragraph plus a Parameters section).",
+                            },
+                        },
+                        "required": ["function_name", "arg_names", "docstring"],
+                    },
+                }
+            },
+            "required": ["drafts"],
+        },
+    }
+
+
+def _resolve_plan_path(path: str) -> Path | None:
+    """Resolve `path` against instrument/plans/, refusing anything outside it.
+
+    Deliberately scoped to `PLANS_DIR`, not the whole project root -- this
+    tool must never be able to reach `instrument/iconfig.yml`, which holds
+    live plaintext MongoDB credentials.
+    """
+    root = Path(bpilot_paths.PLANS_DIR).resolve()
+    candidate = Path(path)
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if resolved.suffix != ".py" or not resolved.is_file():
+        return None
+    return resolved
+
+
+def read_plan_file(path: str) -> dict:
+    resolved = _resolve_plan_path(path)
+    if resolved is None:
+        return {"error": f"'{path}' is not a readable .py file inside instrument/plans/."}
+    functions = bpilot_plan_parser.find_plan_functions_raw(str(resolved))
+    if not functions:
+        return {
+            "path": str(resolved),
+            "functions": [],
+            "note": "No top-level plan functions detected (no __all__ and no generator functions found).",
+        }
+    return {"path": str(resolved), "functions": functions}
+
+
+def validate_docstring(drafts: list[dict]) -> dict:
+    results = []
+    for draft in drafts:
+        check = bpilot_plan_parser.validate_docstring_text(draft.get("docstring", ""), draft.get("arg_names"))
+        results.append({"function_name": draft.get("function_name"), **check})
+    return {"results": results}

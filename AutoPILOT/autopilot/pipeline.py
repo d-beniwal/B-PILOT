@@ -28,6 +28,8 @@ _LOOKUP_TOOL_NAMES = {
     tools.LIST_ALL_PLANS_TOOL_NAME,
     tools.DESCRIBE_PLAN_TOOL_NAME,
     tools.LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME,
+    tools.READ_PLAN_FILE_TOOL_NAME,
+    tools.VALIDATE_DOCSTRING_TOOL_NAME,
 }
 
 
@@ -88,6 +90,20 @@ def _build_system_prompt(catalog) -> str:
         "after looking things up. Prefer either of these over fabricating "
         "parameter values."
     )
+    lines.append("")
+    lines.append(
+        "You can also help fix plan docstrings so they match the grammar "
+        "above. If asked to review or draft docstrings for a real .py file, "
+        "call `read_plan_file` first -- never guess a function's signature "
+        "or invent what its docstring currently says. Draft one full "
+        "replacement docstring per function (an opening summary paragraph "
+        "plus a Parameters section, documenting only arguments a human "
+        "should be able to edit), then call `validate_docstring` on all "
+        "your drafts before replying and fix anything it flags. You cannot "
+        "edit the file yourself -- your final reply must present the "
+        "corrected docstring(s) as fenced code blocks for the user to paste "
+        "in by hand, and should say so explicitly."
+    )
     return "\n".join(lines)
 
 
@@ -97,7 +113,7 @@ def converse(
     profile: str | None = None,
     client: ArgoClient | None = None,
     temperature: float | None = None,
-    max_turns: int = 4,
+    max_turns: int = 6,
 ) -> tuple[PlanResult, list[dict]]:
     """Run one user turn through the multi-tool agent loop.
 
@@ -126,6 +142,8 @@ def converse(
         tools.build_list_all_plans_schema(),
         tools.build_describe_plan_schema(),
         tools.build_list_scan_building_blocks_schema(),
+        tools.build_read_plan_file_schema(),
+        tools.build_validate_docstring_schema(),
     ]
 
     system = _build_system_prompt(catalog)
@@ -163,8 +181,12 @@ def converse(
                 result_data = tools.list_all_plans(plan_cat, tool_use.input.get("tier"))
             elif tool_use.name == tools.DESCRIBE_PLAN_TOOL_NAME:
                 result_data = tools.describe_plan(plan_cat, tool_use.input.get("name", ""))
-            else:
+            elif tool_use.name == tools.LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME:
                 result_data = tools.list_scan_building_blocks(plan_catalog.building_blocks(profile))
+            elif tool_use.name == tools.READ_PLAN_FILE_TOOL_NAME:
+                result_data = tools.read_plan_file(tool_use.input.get("path", ""))
+            else:
+                result_data = tools.validate_docstring(tool_use.input.get("drafts", []))
             messages.append(
                 {
                     "role": "user",

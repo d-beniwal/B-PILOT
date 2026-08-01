@@ -367,6 +367,107 @@ def find_plan_specs(filepath: str) -> dict[str, dict]:
     return specs
 
 
+# ── Raw signature/docstring access (for docstring-authoring assistance) ────────
+# Unlike `find_plan_specs`, these two functions don't filter or interpret a
+# docstring against the grammar -- they hand back the raw material (every
+# argument, the verbatim docstring text) so a caller (e.g. AutoPILOT) can
+# *draft* a compliant docstring for a plan that doesn't have one yet, and
+# check a draft before presenting it.
+
+
+def find_plan_functions_raw(filepath: str) -> list[dict]:
+    """AST-parse a .py file; return raw per-plan-function material.
+
+    Same plan-detection rule as :func:`find_plan_specs` (``__all__`` if
+    present, else every top-level generator function, skip ``_``-prefixed
+    names), but returns *every* signature argument (not just documented
+    ones) plus the verbatim existing docstring, so a caller can draft a
+    replacement rather than only parse a compliant one. Never imports the
+    module. Returns ``[]`` on syntax/OS error.
+    """
+    try:
+        with open(filepath, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=filepath)
+    except (SyntaxError, OSError):
+        return []
+
+    all_names = _module_all(tree)
+
+    functions: list[dict] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name.startswith("_"):
+            continue
+        if all_names is not None:
+            if node.name not in all_names:
+                continue
+        elif not _is_generator(node):
+            continue
+
+        doc = ast.get_docstring(node)
+        doc_meta = _parse_parameters(doc or "")
+
+        args = [
+            {
+                "name": name,
+                "default": None if default is _NODEFAULT else default,
+                "required": default is _NODEFAULT,
+            }
+            for name, default in _signature(node)
+        ]
+
+        functions.append(
+            {
+                "name": node.name,
+                "args": args,
+                "docstring": doc,
+                "documented": bool(doc_meta),
+            }
+        )
+    return functions
+
+
+def validate_docstring_text(docstring: str, arg_names: list[str] | None = None) -> dict:
+    """Check a drafted docstring against the Parameters grammar.
+
+    Parses `docstring` on its own (no file/AST involved) and reports concrete
+    problems: an unknown dtype, a documented parameter name not present in
+    `arg_names` (when given -- catches a stale/hallucinated docstring that
+    documents an argument the function doesn't actually take), and a body
+    missing the required ``' :: '`` short/long split. Does not require a
+    Parameters section to be present (an empty/undocumented docstring simply
+    reports no documented params, not an error).
+    """
+    doc_meta = _parse_parameters(docstring)
+    errors: list[str] = []
+    documented_params: dict[str, dict] = {}
+
+    for name, entry in doc_meta.items():
+        dtype, units, choices, category = _parse_typespec(entry["typespec"])
+        short, long = _parse_body(entry["body"])
+        if dtype not in _KNOWN_DTYPES:
+            errors.append(f"parameter '{name}': unknown dtype '{dtype}'")
+        if arg_names is not None and name not in arg_names:
+            errors.append(f"parameter '{name}': documented but not in the function's real signature {arg_names}")
+        if not long:
+            errors.append(f"parameter '{name}': body is missing the required ' :: ' short/long split")
+        documented_params[name] = {
+            "dtype": dtype,
+            "units": units,
+            "choices": choices,
+            "category": category,
+            "short": short,
+            "long": long,
+        }
+
+    return {
+        "has_parameters_section": bool(doc_meta),
+        "documented_params": documented_params,
+        "errors": errors,
+    }
+
+
 # ── File-browser utilities ────────────────────────────────────────────────────
 
 
