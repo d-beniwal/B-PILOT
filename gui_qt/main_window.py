@@ -35,6 +35,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(S.px(1500), S.px(900))
         self.setMinimumSize(S.px(980), S.px(600))
 
+        self._last_launch_experiment: str | None = None
+        self._exp_probe_inflight = False
+
         self.runner = PlanRunnerPanel()
         self.console = ConsolePanel()
         self.session_log = SessionLogView()
@@ -54,7 +57,6 @@ class MainWindow(QtWidgets.QMainWindow):
         clay.setContentsMargins(0, 0, 0, 0)
         clay.setSpacing(0)
         clay.addWidget(self._build_toolbar())
-        clay.addWidget(self._build_script_params_row())
 
         main_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         main_split.addWidget(self.runner)
@@ -126,34 +128,6 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self._toolbar_status)
         return bar
 
-    def _build_script_params_row(self) -> QtWidgets.QWidget:
-        """Second toolbar row: experiment args recorded by the embedded starter."""
-        bar = QtWidgets.QFrame()
-        bar.setObjectName("toolbar")
-        lay = QtWidgets.QHBoxLayout(bar)
-        lay.setContentsMargins(10, 4, 10, 4)
-        lay.setSpacing(6)
-
-        lay.addWidget(QtWidgets.QLabel("Experiment:"))
-        self._dm_exp = QtWidgets.QLineEdit(config.get("dm_experiment"))
-        self._dm_exp.setMinimumWidth(S.px(150))
-        self._dm_exp.setToolTip(
-            "DM experiment name. Recorded to user_defaults/dm_experiment.txt by "
-            "the embedded starter script."
-        )
-        lay.addWidget(self._dm_exp)
-
-        lay.addWidget(QtWidgets.QLabel("Setup file:"))
-        self._setup_file = QtWidgets.QLineEdit(config.get("setup_file"))
-        self._setup_file.setMaximumWidth(S.px(160))
-        self._setup_file.setToolTip("Setup YAML (default exp_setup.yml).")
-        lay.addWidget(self._setup_file)
-
-        lay.addStretch(1)
-
-        self._script_params_bar = bar
-        return bar
-
     def _browse_dir(self) -> None:
         start = self._workdir.text().strip() or os.path.expanduser("~")
         if not os.path.isdir(start):
@@ -171,6 +145,10 @@ class MainWindow(QtWidgets.QMainWindow):
         vsplit.setChildrenCollapsible(False)
 
         console_card = S.make_card("IPython console")
+        self._exp_banner = QtWidgets.QLabel("")
+        self._exp_banner.setAlignment(QtCore.Qt.AlignCenter)
+        self._exp_banner.setVisible(False)
+        console_card.body.addWidget(self._exp_banner)
         self._console_tabs = QtWidgets.QTabWidget()
         self._console_tabs.addTab(self.console, "Console")
         self._console_tabs.addTab(self.session_log, "Session log")
@@ -334,6 +312,18 @@ class MainWindow(QtWidgets.QMainWindow):
     # ── Console lifecycle ───────────────────────────────────────────────────────
 
     def _launch_console(self) -> None:
+        """Confirm Experiment/Setup file, then launch (cancel aborts entirely)."""
+        from .launch_dialog import LaunchDialog
+
+        dlg = LaunchDialog(self)
+        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        # Persist the experiment args so the embedded starter script picks them up.
+        config.update({
+            "dm_experiment": dlg.experiment(),
+            "setup_file": dlg.setup_file(),
+        })
+        self._last_launch_experiment = dlg.experiment()
         self._launch_embedded()
 
     def _launch_embedded(self) -> None:
@@ -343,11 +333,6 @@ class MainWindow(QtWidgets.QMainWindow):
         except OSError as exc:
             self._set_toolbar_status(f"Cannot create {work_dir}: {exc}", error=True)
             return
-        # Persist the experiment args so the embedded starter script picks them up.
-        config.update({
-            "dm_experiment": self._dm_exp.text().strip(),
-            "setup_file": self._setup_file.text().strip() or "exp_setup.yml",
-        })
         self._launch_btn.setEnabled(False)
         self._attach_btn.setEnabled(False)
         self._set_toolbar_status("Starting IPython…", error=False)
@@ -433,8 +418,54 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Reattached — if the panel is blank the kernel is busy; "
                 "it will respond when the running task finishes."
             )
+            # The GUI never prompted for an experiment this session — read the
+            # truth from the kernel itself rather than trust stale GUI config.
+            self._set_experiment_banner("Experiment: checking…", confirmed=False)
+            self._start_experiment_probe()
         else:
             self._set_toolbar_status(f"IPython running in {where}")
+            # Trusted immediately: this is exactly what LaunchDialog just wrote
+            # to dm_experiment.txt before this kernel started.
+            self._set_experiment_banner(
+                f"Experiment: {self._last_launch_experiment}", confirmed=True
+            )
+
+    def _start_experiment_probe(self) -> None:
+        """Poll the attached kernel for DM_EXP until it resolves, then stop.
+
+        `instrument.devices.global_variables` (which defines ``DM_EXP``) is
+        only importable once Bluesky is loaded in that kernel — which may not
+        have happened yet at attach time — so this retries rather than giving
+        up after one failed query.
+        """
+        if getattr(self, "_exp_probe_timer", None) is None:
+            self._exp_probe_timer = QtCore.QTimer(self)
+            self._exp_probe_timer.setInterval(3000)
+            self._exp_probe_timer.timeout.connect(self._probe_experiment)
+        self._exp_probe_inflight = False
+        self._exp_probe_timer.start()
+        self._probe_experiment()
+
+    def _probe_experiment(self) -> None:
+        if self._exp_probe_inflight or not self.console.is_running():
+            return
+        self._exp_probe_inflight = True
+        self.console.query_values(
+            {"__dm_exp__": "instrument.devices.global_variables.DM_EXP"},
+            self._on_experiment_probed,
+        )
+
+    def _on_experiment_probed(self, result: dict) -> None:
+        self._exp_probe_inflight = False
+        value = result.get("__dm_exp__")
+        if value:
+            self._set_experiment_banner(f"Experiment: {value}", confirmed=True)
+            self._exp_probe_timer.stop()
+        else:
+            self._set_experiment_banner(
+                "Experiment: unknown — Bluesky not loaded in this kernel yet",
+                confirmed=False,
+            )
 
     def _on_console_ready(self) -> None:
         """Kernel finished its handshake (idle) — safe to run and prompt visible."""
@@ -495,6 +526,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_controls.set_console_ready(False)
         self.mode_buttons.set_console_ready(False)
         self.session_log.stop()   # kernel gone — stop polling (keep text visible)
+        self._clear_experiment_banner()
+
+    def _set_experiment_banner(self, text: str, *, confirmed: bool) -> None:
+        """Show `text` in a bold banner above the console tabs.
+
+        `confirmed` picks accent (trusted value) vs warning (not yet known)
+        styling — see :meth:`_on_console_started` / :meth:`_on_experiment_probed`.
+        """
+        color = S.ACCENT if confirmed else S.WARNING
+        self._exp_banner.setStyleSheet(
+            f"font-weight: 700; font-size: {S.px(13)}px; padding: 4px; "
+            f"border-radius: 3px; background: {color}; color: white;"
+        )
+        self._exp_banner.setText(text)
+        self._exp_banner.setVisible(True)
+
+    def _clear_experiment_banner(self) -> None:
+        self._exp_banner.setVisible(False)
+        self._exp_banner.setText("")
+        if getattr(self, "_exp_probe_timer", None) is not None:
+            self._exp_probe_timer.stop()
 
     def _load_bluesky(self) -> None:
         from . import config
