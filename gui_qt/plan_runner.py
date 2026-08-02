@@ -28,6 +28,7 @@ from . import config
 from . import device_source
 from . import plan_parser as P
 from . import style as S
+from .panel_ribbon import CollapsibleSplitterPanel
 from .plan_parser import _NODEFAULT
 from .plan_parser import ParamSpec
 from .plan_parser import RawCode
@@ -53,9 +54,17 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     # emitted with (command_text, run_notes) when the user clicks Add to Queue
     queueRequested = QtCore.pyqtSignal(str, str)
 
-    def __init__(self, parent=None) -> None:
-        """Build the panel and populate the file browser + plan dropdown."""
+    def __init__(self, parent=None, *, ribbon=None) -> None:
+        """Build the panel and populate the file browser + plan dropdown.
+
+        `ribbon` (a :class:`gui_qt.panel_ribbon.PanelRibbon`), if given, wires
+        a minimize button onto the file-browser and plan-form panels so they
+        can be tucked into the main window's left-edge ribbon. Omitted in
+        contexts that don't have one (there are none today, but keeps this
+        panel usable standalone).
+        """
         super().__init__(parent)
+        self._ribbon = ribbon
         self._file_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._plan_origins: dict[str, str] = {}
         self._plan_specs: dict[str, dict] = {}
@@ -83,11 +92,22 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
-        split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        split = S.Splitter(QtCore.Qt.Horizontal)
+        S.configure_splitter(split)
         outer.addWidget(split, 1)
 
         # ── Left: file browser card ─────────────────────────────────────────
         fb_card = S.make_card("User files")
+        if self._ribbon is not None:
+            fb_head = QtWidgets.QHBoxLayout()
+            fb_head.setContentsMargins(0, 0, 0, 0)
+            fb_head.addStretch(1)
+            fb_min_btn = QtWidgets.QToolButton()
+            fb_min_btn.setText("—")
+            fb_min_btn.setAutoRaise(True)
+            fb_min_btn.setToolTip("Minimize this panel to the ribbon")
+            fb_head.addWidget(fb_min_btn)
+            fb_card.body.addLayout(fb_head)
         self._fb_container = QtWidgets.QWidget()
         self._fb_layout = QtWidgets.QVBoxLayout(self._fb_container)
         self._fb_layout.setContentsMargins(2, 2, 2, 2)
@@ -102,6 +122,11 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         fb_card.body.addWidget(refresh_btn)
         fb_card.setMinimumWidth(S.px(170))
         split.addWidget(fb_card)
+        if self._ribbon is not None:
+            self._fb_collapsible = CollapsibleSplitterPanel(
+                split, fb_card, self._ribbon, "plans", "Plans list"
+            )
+            fb_min_btn.clicked.connect(self._fb_collapsible.minimize)
 
         # ── Right: plan selector + params + command ─────────────────────────
         right = QtWidgets.QWidget()
@@ -116,6 +141,12 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._plan_cb.currentIndexChanged.connect(self._on_plan_change)
         sel_row.addWidget(self._plan_cb)
         sel_row.addStretch(1)
+        if self._ribbon is not None:
+            form_min_btn = QtWidgets.QToolButton()
+            form_min_btn.setText("—")
+            form_min_btn.setAutoRaise(True)
+            form_min_btn.setToolTip("Minimize this panel to the ribbon")
+            sel_row.addWidget(form_min_btn)
         rlay.addLayout(sel_row)
 
         # Full-width row below the dropdown -- long descriptions used to be
@@ -128,8 +159,8 @@ class PlanRunnerPanel(QtWidgets.QWidget):
 
         # Resizable stack: Parameters / Command / Run notes.  A vertical splitter
         # gives each panel a draggable divider so heights can be adjusted.
-        vsplit = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        vsplit.setChildrenCollapsible(False)
+        vsplit = S.Splitter(QtCore.Qt.Vertical)
+        S.configure_splitter(vsplit)
 
         # ── Parameters card (scrollable grid) ──
         param_card = S.make_card("Parameters   (hover a name · ★ = required)")
@@ -207,6 +238,11 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setSizes([190, 560])
+        if self._ribbon is not None:
+            self._form_collapsible = CollapsibleSplitterPanel(
+                split, right, self._ribbon, "planform", "Plan form"
+            )
+            form_min_btn.clicked.connect(self._form_collapsible.minimize)
 
     # ── Console-readiness (set by the main window) ──────────────────────────────
 

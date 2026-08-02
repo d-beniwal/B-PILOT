@@ -14,6 +14,8 @@ from . import paths
 from . import style as S
 from .console_panel import ConsolePanel
 from .mode_buttons import ModeButtonBar
+from .panel_ribbon import CollapsibleDockPanel
+from .panel_ribbon import PanelRibbon
 from .plan_runner import PlanRunnerPanel
 from .queue_panel import QueuePanel
 from .run_controls import RunControlBar
@@ -34,11 +36,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("MPE Bluesky Plan Runner (Qt)")
         self.resize(S.px(1500), S.px(900))
         self.setMinimumSize(S.px(980), S.px(600))
+        # AutoPILOT is the only dock widget, but nesting still widens Qt's own
+        # redock hit-testing along an edge (see _sync_autopilot_dock).
+        self.setDockNestingEnabled(True)
 
         self._last_launch_experiment: str | None = None
         self._exp_probe_inflight = False
 
-        self.runner = PlanRunnerPanel()
+        self.ribbon = PanelRibbon()
+        self.runner = PlanRunnerPanel(ribbon=self.ribbon)
         self.console = ConsolePanel()
         self.session_log = SessionLogView()
         self.run_controls = RunControlBar(self.console, self._shutdown_kernel)
@@ -58,13 +64,20 @@ class MainWindow(QtWidgets.QMainWindow):
         clay.setSpacing(0)
         clay.addWidget(self._build_toolbar())
 
-        main_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        main_split = S.Splitter(QtCore.Qt.Horizontal)
+        S.configure_splitter(main_split)
         main_split.addWidget(self.runner)
         main_split.addWidget(self._build_right_panel())
         main_split.setStretchFactor(0, 1)
         main_split.setStretchFactor(1, 1)
         main_split.setSizes([840, 620])
-        clay.addWidget(main_split, 1)
+
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self.ribbon)
+        row.addWidget(main_split, 1)
+        clay.addLayout(row, 1)
 
         self.setCentralWidget(central)
 
@@ -72,6 +85,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # AutoPILOT/ isn't there or its deps aren't installed (see
         # gui_qt/autopilot_bridge.py); enabled via Configuration -> Appearance.
         self.autopilot_chat = None
+        self._autopilot_collapsible = None
         self._sync_autopilot_dock()
 
         self._build_menu()
@@ -141,8 +155,8 @@ class MainWindow(QtWidgets.QMainWindow):
     # ── Right panel: console + notes ────────────────────────────────────────────
 
     def _build_right_panel(self) -> QtWidgets.QWidget:
-        vsplit = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        vsplit.setChildrenCollapsible(False)
+        vsplit = S.Splitter(QtCore.Qt.Vertical)
+        S.configure_splitter(vsplit)
 
         console_card = S.make_card("IPython console")
         self._exp_banner = QtWidgets.QLabel("")
@@ -282,8 +296,20 @@ class MainWindow(QtWidgets.QMainWindow):
         have = self.autopilot_chat is not None
         if want and not have:
             self.autopilot_chat = autopilot_bridge.ChatDockWidget(self.runner, self)
+            # Left/right only (never top/bottom) -- a chat panel is unusable as
+            # a thin horizontal strip, and narrowing the allowed areas also
+            # stops the top/bottom corners from competing with the right edge
+            # for Qt's redock-target hit-testing.
+            self.autopilot_chat.setAllowedAreas(
+                QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea
+            )
             self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.autopilot_chat)
+            self._autopilot_collapsible = CollapsibleDockPanel(
+                self.autopilot_chat, self.ribbon, "autopilot", "AutoPILOT"
+            )
         elif have and not want:
+            self._autopilot_collapsible.detach()
+            self._autopilot_collapsible = None
             self.removeDockWidget(self.autopilot_chat)
             self.autopilot_chat.deleteLater()
             self.autopilot_chat = None

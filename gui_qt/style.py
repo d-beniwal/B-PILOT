@@ -542,6 +542,8 @@ def stylesheet(
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     QSplitter::handle {{ background: {t.splitter}; }}
     QSplitter::handle:hover {{ background: {t.hover}; }}
+    QMainWindow::separator {{ background: {t.splitter}; width: {px(10)}px; height: {px(10)}px; }}
+    QMainWindow::separator:hover {{ background: {t.hover}; }}
     QStatusBar {{ color: {t.muted}; }}
     """
 
@@ -586,6 +588,56 @@ def primary_btn(text: str) -> QtWidgets.QPushButton:
     b.setObjectName("primary")
     b.setMinimumHeight(px(32))
     return b
+
+
+class _GripHandle(QtWidgets.QSplitterHandle):
+    """Splitter handle that paints a small 3-dot grip so it reads as
+    draggable instead of blending into the adjacent card border."""
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """Draw the default handle, then overlay 3 dots along its centerline."""
+        super().paintEvent(event)
+        from PyQt5 import QtGui
+
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(MUTED))
+        cx, cy = self.width() / 2.0, self.height() / 2.0
+        r = max(1.0, px(1))
+        gap = px(4)
+        for off in (-gap, 0, gap):
+            center = (
+                QtCore.QPointF(cx, cy + off)
+                if self.orientation() == QtCore.Qt.Horizontal
+                else QtCore.QPointF(cx + off, cy)
+            )
+            painter.drawEllipse(center, r, r)
+
+
+class Splitter(QtWidgets.QSplitter):
+    """QSplitter whose handles paint a grip (see :class:`_GripHandle`).
+
+    Use together with :func:`configure_splitter` at every splitter
+    construction site so drag behavior is wide, visible, and consistent
+    across the app.
+    """
+
+    def createHandle(self) -> QtWidgets.QSplitterHandle:  # noqa: N802
+        """Return a grip-painted handle instead of Qt's plain one."""
+        return _GripHandle(self.orientation(), self)
+
+
+def configure_splitter(splitter: QtWidgets.QSplitter) -> None:
+    """Apply the shared, comfortable drag settings to `splitter`.
+
+    A wide-enough hit target, live (opaque) resize feedback, and no
+    accidental collapse-to-zero from a slightly-off drag — call this right
+    after constructing any :class:`Splitter` in the app.
+    """
+    splitter.setHandleWidth(px(10))
+    splitter.setOpaqueResize(True)
+    splitter.setChildrenCollapsible(False)
 
 
 class NoScrollComboBox(QtWidgets.QComboBox):
