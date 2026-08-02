@@ -117,6 +117,18 @@ def _build_system_prompt(catalog) -> str:
     )
     lines.append("")
     lines.append(
+        "Every plan-building-block field (plan_opener, per_step, plan_closer, "
+        "suspender, pseudo_suspender) must be given a concrete value -- never "
+        "leave one blank. Default to the simplest/most generic option in its "
+        "category unless the request implies a specific one. When a motor "
+        "parameter's `_axis`/`_axes` field is offered, that motor has more "
+        "than one axis and you must pick one (from the request if it says "
+        "which, otherwise the most obviously relevant one, e.g. 'x' for a "
+        "horizontal scan) -- omitting it when it's offered will fail "
+        "validation. Motors with zero or one axis need no axis field at all."
+    )
+    lines.append("")
+    lines.append(
         "Before proposing a plan, sanity-check the requested values against "
         "normal use for that kind of scan (e.g. a motor range spanning "
         "hundreds of meters, or a sub-millisecond exposure, is not normal "
@@ -148,8 +160,11 @@ def converse(
     client = client or ArgoClient()
     catalog = device_catalog.load(profile)
     plan_cat = plan_catalog.load(profile)
+    blocks = plan_catalog.building_blocks(profile)
 
-    proposal_schemas = {t.key: plan_spec.build_tool_schema(t, catalog) for t in plan_context.TEMPLATES.values()}
+    proposal_schemas = {
+        t.key: plan_spec.build_tool_schema(t, catalog, blocks) for t in plan_context.TEMPLATES.values()
+    }
     tool_name_to_template = {
         schema["name"]: plan_context.TEMPLATES[key] for key, schema in proposal_schemas.items()
     }
@@ -268,7 +283,7 @@ def converse(
         )
 
     try:
-        clean = plan_spec.validate(template, raw_spec, catalog)
+        clean = plan_spec.validate(template, raw_spec, catalog, blocks)
     except plan_spec.ValidationError as exc:
         return (
             PlanResult(
@@ -356,17 +371,25 @@ def _flag_device_substitutions(template, clean: dict, request: str) -> list[str]
     """
     request_lower = request.lower()
     notes = []
+
+    def _mentioned(value: str) -> bool:
+        # Motor values may carry a ".axis" suffix (see plan_spec.py's
+        # `_resolve_motor_token`) that the request text never spells out --
+        # match on the bare device name so a correctly-resolved axis doesn't
+        # look like a substitution.
+        return value.split(".", 1)[0].lower() in request_lower
+
     for spec in template.param_specs:
         if spec.dtype == "device":
             value = clean.get(spec.name)
-            if value and value.lower() not in request_lower:
+            if value and not _mentioned(value):
                 notes.append(
                     f"Note: assumed {spec.category} '{value}' for {spec.name} based on "
                     "your description -- let me know if a different device was meant."
                 )
         elif spec.dtype == "device_list":
             for value in clean.get(spec.name) or []:
-                if value.lower() not in request_lower:
+                if not _mentioned(value):
                     notes.append(
                         f"Note: assumed {spec.category} '{value}' for {spec.name} based on "
                         "your description -- let me know if a different device was meant."

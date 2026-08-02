@@ -16,6 +16,105 @@ to reconstruct later). Never rewrite history; add a new entry to supersede.
 > keeps only its one genuinely instrument/QS-scoped entry (2026-07-15,
 > adopting the two-layer `.context` system for that project).
 
+## 2026-08-01 — AutoPILOT Slice 8: generalize plan-drafting from 2 hardcoded templates to all 21 documented plans
+
+User asked for AutoPILOT to draft any plan in `scan_skeletons.py` (6),
+`scans_standard.py` (9), `scans_stationary.py` (6) — not just the two
+hand-coded templates (`step_scan`/`count`) — and hand every draft to
+B-PILOT's existing "Open in form" mechanism, tested with synthetic prompts.
+
+- **Dynamic template registry, not a bigger hardcoded dict.**
+  `plan_context.TEMPLATES` is now built at import time by calling
+  `gui_qt.plan_parser.find_plan_specs()` over the three files and keeping
+  every documented function. Chosen over enumerating 21 `Template(...)`
+  literals by hand because `find_plan_specs` is the same parser B-PILOT's
+  own GUI already uses to build its live form — using it here guarantees
+  AutoPILOT's schema can never drift from what the GUI would actually
+  accept, and a 22nd future plan becomes draftable with zero AutoPILOT code
+  changes as long as its docstring follows the existing grammar. Kept the
+  `STEP_SCAN`/`COUNT` string constants defined even though nothing
+  populates `TEMPLATES` with those keys anymore — `plan_renderer.py`'s
+  `_CALL_BODY` dormant generated-file fallback path imports them at module
+  level, so removing them would be an `ImportError`, not a harmless dead
+  branch.
+- **`block` dtype forced required, regardless of the real function's own
+  default.** Mirrors B-PILOT's own GUI rule
+  (`gui_qt/plan_runner.py`'s `_field_error`/`_parse_params`): a blank
+  `plan_opener`/`per_step`/`plan_closer`/`suspender`/`pseudo_suspender` has
+  no working fallback at runtime, so `plan_spec.build_tool_schema` puts it
+  in the JSON schema's `required` list and `plan_spec.validate` rejects a
+  missing value, even for params whose Python signature default is
+  non-None. Enum-restricted to the profile's own `blocks[category]` list
+  (from `plan_catalog.building_blocks(profile)`) so the model can't invent
+  a building-block name that doesn't exist for this beamline.
+- **Motor-axis qualification via a sibling schema field, not a combined
+  "motor.axis" string field.** In this codebase a motor is almost never
+  itself settable (see `gui_qt/axis_discovery.py`) — a plan needs
+  `motor.axis`. Rather than asking the model to produce the dotted string
+  directly (error-prone, and indistinguishable from a plain device name in
+  the schema), `device`/`device_list` params with `category=="motor"` keep
+  the device-name field as a plain enum-of-names, and get a *sibling*
+  `<name>_axis` (or `<name>_axes` for lists) field the model fills in only
+  when `catalog.axes_for(name)` says the motor actually has more than one
+  axis. `_resolve_motor_token()` in `plan_spec.py` mirrors
+  `gui_qt/skeleton_widgets.py`'s `MotorAxisPicker` 0/1/>1-axis logic exactly
+  (0 → bare name, 1 → auto-resolve without asking, >1 → error if the model
+  omits the axis) and stores the resolved `"motor.axis"` (or bare name)
+  string in `clean[spec.name]` — meaning `plan_renderer.py`'s existing
+  bare-identifier device rendering needed zero changes for this to work.
+  Required adding `axes_for()` to AutoPILOT's own `DeviceCatalog`
+  (`device_catalog.py`), which previously only wrapped
+  `gui_qt.device_discovery.scan()` and had no axis data at all — added a
+  second `gui_qt.axis_discovery.scan()` call over the same resolved search
+  paths, same AST-only safety guarantee as the existing device scan.
+- **`axes` array schema for the 6 scan_skeletons.py plans**, whose
+  motor(s)/position(s) are a bare positional `*args` prefix that never
+  becomes a `ParamSpec` at all. Schema shape keyed off
+  `template.skeleton`'s shape (`list`/`list_grid`/`step`/`step_grid`,
+  reusing `gui_qt.plan_parser.SKELETON_SHAPES` rather than reinventing it).
+  Validates into `clean["__axes__"]`, which `plan_renderer.render_command`
+  flattens into positional tokens *before* the keyword-arg list —
+  positional-then-keyword matches exactly what
+  `gui_qt/plan_runner.py`'s `_apply_skeleton_args()` expects to parse back
+  out, chunked by `_SKELETON_ROW_WIDTH[shape]`.
+- **Fixed a pre-existing false-positive in `_flag_device_substitutions`**
+  (the "Note: assumed device X..." heuristic in `pipeline.py`): it matched
+  the resolved device value against the raw request text verbatim, so
+  every motor-axis-qualified plan (e.g. `ic1A.x`) would spuriously fire the
+  note since the user's request text never literally contains the `.x`
+  suffix. Fixed by stripping the axis suffix before matching. Deliberately
+  did **not** extend this heuristic to `block` dtype — block values are
+  almost always model-inferred defaults a user never names verbatim, so
+  doing so would spam the note on nearly every drafted plan.
+- **Prerequisite bug found and fixed first:** all 6 profile plan-file
+  configs (`default_config.json`/`active_config.json` × `s1id`/`s20idd`/
+  `s20ide`) still pointed at `*_gui_testing.py`/`bpilot/*.py` plan files
+  that commit `ce82efb` (mpe_bluesky) had already deleted when the B-PILOT
+  grammar was moved in-place into the real `instrument/plans/*.py` files.
+  This would have broken "Open in form" for any of these 21 plans
+  regardless of the AutoPILOT work — fixed `visible_plan_files` to the
+  real three filenames and `default_plan_file` to `scans_stationary.py` in
+  all 6 files.
+- **Verified in three layers**, per the user's explicit ask for synthetic
+  testing: (1) a no-network unit script driving `plan_spec.validate` +
+  `plan_renderer.render_command` directly for one function per skeleton
+  shape plus a plain-kwargs function, asserting valid-Python output via
+  `ast.parse`; (2) live-Argo synthetic natural-language prompts through the
+  unmodified `AutoPILOT/scripts/try_plan_builder.py` CLI harness, spanning
+  all three files plus a `mpe_count` regression check plus a scope-boundary
+  decline (a real plan outside the three files); (3) an offscreen-Qt
+  (`QT_QPA_PLATFORM=offscreen`) round-trip instantiating the real
+  `PlanRunnerPanel`, explicitly checking all three plan-file checkboxes
+  (fixing `default_plan_file` alone only pre-checks one — the plan document
+  had already flagged this caveat), and feeding real generated commands
+  through `load_from_command()`, confirming exact field-level restoration
+  (motor/axis picker values, block-dtype dropdown selections, plain
+  fields). All three layers passed; the only bugs found were in the
+  throwaway test harnesses themselves (a bad `sys.path`, and a test-loop
+  condition that didn't know `block` fields are forced-required), not in
+  production code. Not yet click-tested through the actual chat-dock UI
+  with a mouse — flagged in STATE.md as the next verification step.
+
 ## 2026-08-01 — GUI layout cleanup: single launch mode, menu-ized viewer/AutoPILOT, shutdown clears the session log
 
 Four toolbar/menu changes requested to declutter the main window and fix a

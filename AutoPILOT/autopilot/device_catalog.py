@@ -15,6 +15,7 @@ from ._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
 
+from gui_qt import axis_discovery as bpilot_axis_discovery  # noqa: E402
 from gui_qt import config as bpilot_config  # noqa: E402
 from gui_qt import device_discovery as bpilot_device_discovery  # noqa: E402
 from gui_qt import device_source as bpilot_device_source  # noqa: E402
@@ -28,6 +29,7 @@ class DeviceCatalog:
     beamline: str
     by_category: dict[str, list[str]]
     import_module_by_name: dict[str, str]  # device name -> dotted module, relative to instrument/plans/
+    axes: dict[str, list[str]]  # motor device name -> scannable axis names (see gui_qt/axis_discovery.py)
 
     def names_for(self, category: str) -> list[str]:
         return list(self.by_category.get(category, []))
@@ -38,6 +40,16 @@ class DeviceCatalog:
         if module is None:
             raise KeyError(f"Unknown device {name!r} -- not in this catalog")
         return f"from ..{module} import {name}"
+
+    def axes_for(self, name: str) -> list[str]:
+        """Scannable axis names for motor device `name` (empty if it has none).
+
+        An empty list means the device is itself settable (e.g. a bare
+        ``EpicsMotor``) -- callers then use the bare device name rather than
+        ``device.axis``. Mirrors ``gui_qt/device_source.py``'s
+        ``DeviceCatalog.axes_for``.
+        """
+        return list(self.axes.get(name, []))
 
 
 def _module_relative_to_project(source_file: str) -> str:
@@ -68,4 +80,14 @@ def load(profile: str | None = None) -> DeviceCatalog:
         by_category.setdefault(device.category, []).append(device.name)
         import_module_by_name[device.name] = _module_relative_to_project(device.source_file)
 
-    return DeviceCatalog(beamline=beamline, by_category=by_category, import_module_by_name=import_module_by_name)
+    # Axes are a structural property of the same source files -- scanned
+    # fresh here (never persisted), same AST-only guarantee as the device
+    # scan above. Mirrors gui_qt/device_source.py's get_catalog().
+    axes = bpilot_axis_discovery.scan(resolved_paths)
+
+    return DeviceCatalog(
+        beamline=beamline,
+        by_category=by_category,
+        import_module_by_name=import_module_by_name,
+        axes=axes,
+    )

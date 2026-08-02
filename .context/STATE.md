@@ -1,7 +1,7 @@
 # STATE — current snapshot
 
 _Keep this under ~1 page. Permanent history lives in DECISIONS.md, not here._
-_Last updated: 2026-08-01 (GUI layout cleanup session)_
+_Last updated: 2026-08-01 (AutoPILOT drafting scope generalized to all 21 plans)_
 
 ## Dev environment (this device)
 
@@ -43,7 +43,32 @@ standalone without it) driving a multi-turn agent (`pipeline.converse()`,
 decline tools, never raw code execution. Drafts land in gitignored
 `AutoPILOT/generated_plans/` for a human to review and promote manually.
 
-- **Slice 7 done (2026-08-01):** `read_plan_file` (hard-scoped to
+- **Slice 8 done (2026-08-01):** drafting scope generalized from 2 hardcoded
+  templates to all 21 documented plans across `scan_skeletons.py` (6),
+  `scans_standard.py` (9), `scans_stationary.py` (6) — `plan_context.TEMPLATES`
+  is now built at import time from `gui_qt.plan_parser.find_plan_specs()` over
+  those 3 files instead of hand-coded, so a new plan becomes draftable with no
+  AutoPILOT code change. Added two dtype/shape capabilities `plan_spec.py`
+  didn't have before: **`block`** (plan_opener/per_step/plan_closer/
+  suspender/pseudo_suspender — enum-restricted to the profile's building
+  blocks, forced required, never blank) and **motor-axis qualification**
+  (`device`/`device_list` with `category=="motor"` resolve to `motor.axis`
+  via a sibling `_axis`/`_axes` schema field and `catalog.axes_for()`, mirroring
+  `gui_qt/skeleton_widgets.py`'s `MotorAxisPicker`'s 0/1/>1-axis logic — new
+  in `device_catalog.py` too), plus an `axes` array schema for the 6
+  scan_skeletons.py plans whose motor/position args are a bare `*args`
+  (`plan_renderer.render_command` flattens `clean["__axes__"]` into
+  positional tokens ahead of the keyword args). Also fixed a prerequisite bug:
+  all 6 profile plan-file configs (`default_config.json`/`active_config.json`
+  ×3 profiles) still pointed at plan files deleted by upstream commit
+  `ce82efb` — fixed to the real 3 files. Verified in 3 layers: a no-network
+  unit script (validate+render for one function per shape), live-Argo
+  synthetic prompts via `try_plan_builder.py` spanning all 3 files + a
+  `mpe_count` regression check + a scope-boundary decline, and an
+  offscreen-Qt round-trip through the real `PlanRunnerPanel.load_from_command()`
+  confirming exact field-level restoration (motor/axis picker, block
+  dropdowns, plain fields). See `.context/DECISIONS.md` for the full trace.
+- **Slice 7 (2026-08-01):** `read_plan_file` (hard-scoped to
   `instrument/plans/` only) + `validate_docstring` let AutoPILOT draft
   B-PILOT-compliant docstrings for a real plan file, chat-only, never edits
   the file. Verified live against real Argo on `nfdev_jul26.py`. See
@@ -54,6 +79,10 @@ decline tools, never raw code execution. Drafts land in gitignored
 
 ## Now working on / not yet verified on redwood
 
+- **AutoPILOT Slice 8 (2026-08-01, see above)** — thoroughly tested via the
+  CLI harness and an offscreen `PlanRunnerPanel`, but never click-tested
+  through the actual chat-dock UI in a running GUI session. Worth one manual
+  "Open in form" click-through before considering it fully done.
 - **GUI layout cleanup round (2026-08-01)** — Browse button → icon button,
   "Launch script" mode removed entirely (embedded-only now), "Open Bluesky
   Viewer" + AutoPILOT moved from toolbar buttons into the Python menu
@@ -125,6 +154,11 @@ decline tools, never raw code execution. Drafts land in gitignored
 
 ## Recent changes (last 3-5 sessions, dated; drop the oldest as it grows)
 
+- 2026-08-01: **AutoPILOT Slice 8** — drafting scope generalized from 2
+  hardcoded templates to all 21 documented plans across the three plan
+  files, plus `block` dtype and motor-axis qualification support and a
+  prerequisite profile-config fix (see AutoPILOT section above and
+  DECISIONS.md for the full trace).
 - 2026-08-01: **GUI layout cleanup** — Browse button → icon, "Launch script"
   mode removed (`main_window.py`/`config.py`/`config_dialog.py`), Viewer +
   AutoPILOT moved into the Python menu, session log cleared on shutdown but
@@ -138,7 +172,4 @@ decline tools, never raw code execution. Drafts land in gitignored
 - 2026-07-31: AutoPILOT folded into this repo as a tracked subdirectory
   (commit `1c62ebe`), no longer a separate repo.
 - 2026-07-28: AutoPILOT Slice 6 — two-tier real plan catalog + 3 lookup tools.
-- 2026-07-24: B-PILOT usability follow-up round (see above) + scan-building-
-  block discovery (`gui_qt/scan_building_discovery.py`, new Configuration
-  tab) + AutoPILOT Slice 5 (chat-dock themes).
 </content>

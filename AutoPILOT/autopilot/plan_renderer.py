@@ -55,7 +55,9 @@ def _typespec(spec) -> str:
 
 
 def _default_code(spec, value) -> str:
-    if spec.dtype == "device":
+    if spec.dtype in ("device", "block"):
+        # Both are real Python identifiers (an ophyd object or a
+        # building-block function) bound via imports -- never a quoted string.
         return "None" if value is None else str(value)
     if spec.dtype == "device_list":
         return "[" + ", ".join(str(v) for v in (value or [])) + "]"
@@ -86,15 +88,44 @@ def _device_names_used(template: Template, clean: dict) -> list[str]:
     return sorted(set(names))
 
 
+def _axes_tokens(template: Template, clean: dict) -> list[str]:
+    """Flatten ``clean["__axes__"]`` (see plan_spec.py's `_validate_axes_item`)
+    into positional ``RE(...)`` tokens, mirroring
+    gui_qt/skeleton_widgets.py's ``_MotorRow.tokens()``/``MotorRowsWidget``
+    row-by-row concatenation: one motor token followed by that shape's
+    position tokens, repeated per row, with no separator between rows.
+    """
+    shape, _relative = template.skeleton
+    tokens: list[str] = []
+    for row in clean.get("__axes__") or []:
+        tokens.append(row["motor"])
+        if shape in ("list", "list_grid"):
+            tokens.append("[" + ", ".join(repr(p) for p in row["positions"]) + "]")
+        else:
+            tokens.append(repr(row["start"]))
+            tokens.append(repr(row["stop"]))
+            if shape == "step_grid":
+                tokens.append(repr(row["nsteps"]))
+    return tokens
+
+
 def render_command(template: Template, clean: dict) -> str:
     """Return an ``RE(<real_plan>(...))`` string for a GUI-drivable template
     (``template.gui_plan_name`` set) -- fed straight into B-PILOT's own
     ``PlanRunnerPanel.load_from_command()`` rather than a generated file.
-    Reuses ``_default_code`` so device/device_list values come out as bare
-    identifiers (real ophyd objects), exactly what that AST-based restore
-    expects.
+    Reuses ``_default_code`` so device/device_list/block values come out as
+    bare identifiers (real ophyd objects / functions), exactly what that
+    AST-based restore expects.
+
+    When ``template.skeleton`` is set (the six scan_skeletons.py plans), the
+    motor(s)/position(s) are a bare positional ``*args`` prefix rather than
+    ParamSpec-backed keywords -- see ``_apply_skeleton_args()`` in
+    gui_qt/plan_runner.py, which expects to find them first and chunk them by
+    row width.
     """
     args = [f"{spec.name}={_default_code(spec, clean.get(spec.name))}" for spec in template.param_specs]
+    if template.skeleton:
+        args = _axes_tokens(template, clean) + args
     return f"RE({template.gui_plan_name}({', '.join(args)}))"
 
 

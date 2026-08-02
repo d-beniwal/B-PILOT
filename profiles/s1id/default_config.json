@@ -1,10 +1,9 @@
 {
-  "default_plan_file": "scans_stationary_gui_testing.py",
+  "default_plan_file": "scans_stationary.py",
   "visible_plan_files": [
-    "scans_stationary_gui_testing.py",
-    "bpilot/scans_stationary.py",
-    "bpilot/scan_skeletons.py",
-    "bpilot/scans_standard.py"
+    "scan_skeletons.py",
+    "scans_standard.py",
+    "scans_stationary.py"
   ],
   "bluesky_startup": "from instrument.collection import *",
   "keep_kernel_on_exit": true,
