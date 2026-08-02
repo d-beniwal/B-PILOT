@@ -246,7 +246,15 @@ class MotorAxisListWidget(QtWidgets.QWidget):
 
 
 class _MotorRow(QtWidgets.QWidget):
-    """One motor + its position/step fields, plus a Remove button."""
+    """One motor's fields: a picker + shape-dependent numeric fields, plus a
+    Remove button.
+
+    Unlike a typical composite widget, this lays out none of its children --
+    it never appears on screen itself. :class:`MotorRowsWidget` places its
+    widgets (see :meth:`field_widgets`) directly into a shared grid, one grid
+    row per motor, so every row's fields line up under a single column-header
+    row instead of each row repeating its own inline labels.
+    """
 
     changed = QtCore.pyqtSignal()
     remove_requested = QtCore.pyqtSignal(object)  # emits self
@@ -255,43 +263,37 @@ class _MotorRow(QtWidgets.QWidget):
         super().__init__(parent)
         self.shape = shape
         self.nsteps: QtWidgets.QLineEdit | None = None
-
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(S.px(6))
+        self.setVisible(False)  # never shown itself -- pure signal/widget holder
 
         self.picker = MotorAxisPicker(allow_blank=True)
         self.picker.changed.connect(self.changed)
-        layout.addWidget(self.picker, 2)
 
         if shape in _LIST_SHAPES:
             self.positions = QtWidgets.QLineEdit()
             self.positions.setPlaceholderText("10  (or 10, 20, 30)")
             self.positions.textChanged.connect(self.changed)
-            layout.addWidget(QtWidgets.QLabel("positions:"))
-            layout.addWidget(self.positions, 2)
         else:
-            start_lbl = "start (Δ):" if relative else "start:"
-            stop_lbl = "stop (Δ):" if relative else "stop:"
             self.start = _float_field("0", self.changed)
             self.stop = _float_field("10", self.changed)
-            layout.addWidget(QtWidgets.QLabel(start_lbl))
-            layout.addWidget(self.start)
-            layout.addWidget(QtWidgets.QLabel(stop_lbl))
-            layout.addWidget(self.stop)
             if shape == "step_grid":
                 self.nsteps = QtWidgets.QLineEdit()
                 self.nsteps.setValidator(QtGui.QIntValidator(1, 1_000_000))
                 self.nsteps.setPlaceholderText("11")
                 self.nsteps.textChanged.connect(self.changed)
-                layout.addWidget(QtWidgets.QLabel("nsteps:"))
-                layout.addWidget(self.nsteps)
 
-        remove_btn = QtWidgets.QToolButton()
-        remove_btn.setText("✕")
-        remove_btn.setToolTip("Remove this motor")
-        remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
-        layout.addWidget(remove_btn)
+        self.remove_btn = QtWidgets.QToolButton()
+        self.remove_btn.setText("✕")
+        self.remove_btn.setToolTip("Remove this motor")
+        self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
+
+    def field_widgets(self) -> list[QtWidgets.QWidget]:
+        """This row's data-column widgets, in header-column order (no Remove button)."""
+        if self.shape in _LIST_SHAPES:
+            return [self.picker, self.positions]
+        out = [self.picker, self.start, self.stop]
+        if self.nsteps is not None:
+            out.append(self.nsteps)
+        return out
 
     def error(self) -> str | None:
         """Human-readable error, or None if this row is valid."""
@@ -399,9 +401,10 @@ class MotorRowsWidget(QtWidgets.QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(S.px(4))
 
-        self._rows_layout = QtWidgets.QVBoxLayout()
-        self._rows_layout.setSpacing(S.px(4))
-        outer.addLayout(self._rows_layout)
+        self._grid = QtWidgets.QGridLayout()
+        self._grid.setSpacing(S.px(6))
+        outer.addLayout(self._grid)
+        self._ncols = self._add_header()
 
         add_btn = QtWidgets.QPushButton("+ Add motor")
         add_btn.clicked.connect(self.add_row)
@@ -413,20 +416,56 @@ class MotorRowsWidget(QtWidgets.QWidget):
         self.add_row()
         self.add_row()
 
+    def _add_header(self) -> int:
+        """Add the single column-header row above the motor rows.
+
+        Replaces the old per-row inline labels ("positions:", "start:", ...)
+        with one set of column headers, freeing the fields themselves to be
+        wider and easier to read. Returns the data-column count (the Remove
+        button lives one column past it).
+        """
+        if self.shape in _LIST_SHAPES:
+            headers = ["Motor", "Positions"]
+        else:
+            start_lbl = "Start (Δ)" if self.relative else "Start"
+            stop_lbl = "Stop (Δ)" if self.relative else "Stop"
+            headers = ["Motor", start_lbl, stop_lbl]
+            if self.shape == "step_grid":
+                headers.append("Steps")
+        for col, text in enumerate(headers):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setStyleSheet(f"color: {S.MUTED}; font-weight: bold;")
+            self._grid.addWidget(lbl, 0, col)
+        self._grid.setColumnStretch(0, 2)
+        for col in range(1, len(headers)):
+            self._grid.setColumnStretch(col, 3)
+        self._grid.setColumnStretch(len(headers), 0)  # Remove-button column
+        return len(headers)
+
     def add_row(self) -> None:
         row = _MotorRow(self.shape, self.relative)
         row.changed.connect(self.changed)
         row.remove_requested.connect(self._remove_row)
         self._rows.append(row)
-        self._rows_layout.addWidget(row)
+        self._place_row(row)
         self.changed.emit()
+
+    def _place_row(self, row: _MotorRow) -> None:
+        """(Re)place `row`'s widgets at its current index in the shared grid."""
+        grid_row = self._rows.index(row) + 1  # +1: header occupies row 0
+        for col, widget in enumerate(row.field_widgets()):
+            self._grid.addWidget(widget, grid_row, col)
+        self._grid.addWidget(row.remove_btn, grid_row, self._ncols)
 
     def _remove_row(self, row: _MotorRow) -> None:
         if len(self._rows) <= 1:
             return  # floor: always at least one motor
         self._rows.remove(row)
-        self._rows_layout.removeWidget(row)
+        for widget in row.field_widgets() + [row.remove_btn]:
+            self._grid.removeWidget(widget)
         row.deleteLater()
+        for remaining in self._rows:  # re-place so grid rows stay contiguous
+            self._place_row(remaining)
         self.changed.emit()
 
     def errors(self) -> list[str]:

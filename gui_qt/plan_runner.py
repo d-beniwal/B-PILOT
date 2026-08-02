@@ -115,11 +115,16 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._plan_cb.setMinimumWidth(S.px(220))
         self._plan_cb.currentIndexChanged.connect(self._on_plan_change)
         sel_row.addWidget(self._plan_cb)
+        sel_row.addStretch(1)
+        rlay.addLayout(sel_row)
+
+        # Full-width row below the dropdown -- long descriptions used to be
+        # squeezed into the leftover space beside the combo box; a dedicated
+        # row lets them use the whole panel width instead.
         self._doc_lbl = QtWidgets.QLabel("")
         self._doc_lbl.setWordWrap(True)
         self._doc_lbl.setStyleSheet(f"color: {S.MUTED};")
-        sel_row.addWidget(self._doc_lbl, 1)
-        rlay.addLayout(sel_row)
+        rlay.addWidget(self._doc_lbl)
 
         # Resizable stack: Parameters / Command / Run notes.  A vertical splitter
         # gives each panel a draggable divider so heights can be adjusted.
