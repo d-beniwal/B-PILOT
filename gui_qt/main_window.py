@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 
 from PyQt5 import QtCore
@@ -74,7 +73,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_autopilot_dock()
 
         self._build_menu()
-        self._apply_launch_mode()   # show/hide script params + set control states
         self.statusBar().showMessage(
             "Pick a Launch mode → Launch IPython → Load Bluesky, then Run plans."
         )
@@ -95,24 +93,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._workdir.setToolTip("Directory the Bluesky session runs in.")
         lay.addWidget(self._workdir)
 
-        browse_btn = QtWidgets.QPushButton("Browse…")
+        browse_btn = QtWidgets.QToolButton()
+        browse_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DirOpenIcon))
+        browse_btn.setToolTip("Select the Bluesky directory…")
         browse_btn.clicked.connect(self._browse_dir)
         lay.addWidget(browse_btn)
-
-        lay.addWidget(QtWidgets.QLabel("  Launch:"))
-        self._mode_combo = S.NoScrollComboBox()
-        self._mode_combo.addItem("Embedded kernel", "embedded")
-        self._mode_combo.addItem("Launch script", "script")
-        self._mode_combo.setCurrentIndex(
-            max(0, self._mode_combo.findData(config.get("launch_mode")))
-        )
-        self._mode_combo.setToolTip(
-            "Embedded kernel: GUI-managed ipykernel (Attach, transcript, queue).\n"
-            "Launch script: run the external launcher (blueskyStarter.sh) in a "
-            "screen session — interact via a terminal."
-        )
-        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        lay.addWidget(self._mode_combo)
 
         self._launch_btn = S.primary_btn("▶  Launch IPython")
         self._launch_btn.clicked.connect(self._launch_console)
@@ -135,13 +120,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._load_btn.clicked.connect(self._load_bluesky)
         lay.addWidget(self._load_btn)
 
-        viewer_btn = QtWidgets.QPushButton("Open Bluesky Viewer")
-        viewer_btn.setToolTip(
-            "Open the data viewer in a separate, independent window/process."
-        )
-        viewer_btn.clicked.connect(self._open_viewer)
-        lay.addWidget(viewer_btn)
-
         lay.addStretch(1)
         self._toolbar_status = QtWidgets.QLabel("")
         self._toolbar_status.setStyleSheet(f"color: {S.MUTED};")
@@ -149,7 +127,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return bar
 
     def _build_script_params_row(self) -> QtWidgets.QWidget:
-        """Second toolbar row: args passed to the launch script (script mode only)."""
+        """Second toolbar row: experiment args recorded by the embedded starter."""
         bar = QtWidgets.QFrame()
         bar.setObjectName("toolbar")
         lay = QtWidgets.QHBoxLayout(bar)
@@ -161,7 +139,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dm_exp.setMinimumWidth(S.px(150))
         self._dm_exp.setToolTip(
             "DM experiment name. Recorded to user_defaults/dm_experiment.txt by "
-            "the launcher (used by both launch modes)."
+            "the embedded starter script."
         )
         lay.addWidget(self._dm_exp)
 
@@ -171,23 +149,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._setup_file.setToolTip("Setup YAML (default exp_setup.yml).")
         lay.addWidget(self._setup_file)
 
-        self._run_mode_label = QtWidgets.QLabel("Run as:")
-        lay.addWidget(self._run_mode_label)
-        self._run_mode = S.NoScrollComboBox()
-        for m in ("screen", "console", "lab"):
-            self._run_mode.addItem(m, m)
-        self._run_mode.setCurrentIndex(
-            max(0, self._run_mode.findData(config.get("script_run_mode")))
-        )
-        self._run_mode.setToolTip(
-            "Launch-script arg 3: screen (recommended from the GUI), console, or "
-            "lab. (Only used by the 'Launch script' mode.)"
-        )
-        lay.addWidget(self._run_mode)
-
-        self._script_hint = QtWidgets.QLabel("")
-        self._script_hint.setStyleSheet(f"color: {S.MUTED};")
-        lay.addWidget(self._script_hint)
         lay.addStretch(1)
 
         self._script_params_bar = bar
@@ -202,36 +163,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if chosen:
             self._workdir.setText(chosen)
-
-    # ── Launch mode (embedded kernel vs external launch script) ─────────────────
-
-    def _is_script_mode(self) -> bool:
-        return self._mode_combo.currentData() == "script"
-
-    def _on_mode_changed(self) -> None:
-        config.update({"launch_mode": self._mode_combo.currentData()})
-        self._apply_launch_mode()
-
-    def _apply_launch_mode(self) -> None:
-        """Set control states for the mode; both modes take Experiment/Setup args."""
-        script = self._is_script_mode()
-        running = self.console.is_running()
-        # Experiment/Setup apply to both modes (both launchers record them);
-        # "Run as" is only used by the external-script mode.
-        self._run_mode_label.setVisible(script)
-        self._run_mode.setVisible(script)
-        self._script_hint.setText(
-            "→ external launcher (interact via a terminal)" if script
-            else "→ embedded kernel starter (activates env + collection)"
-        )
-        # Attach / Load Bluesky / run-controls are embedded-only.
-        self._attach_btn.setEnabled((not script) and (not running))
-        self._load_btn.setEnabled((not script) and running)
-        self._launch_btn.setEnabled(not running)
-        self._launch_btn.setToolTip(
-            "Run the external launch script in a screen session." if script
-            else "Start the embedded kernel (via the embedded starter script)."
-        )
 
     # ── Right panel: console + notes ────────────────────────────────────────────
 
@@ -294,6 +225,28 @@ class MainWindow(QtWidgets.QMainWindow):
         act_config.setToolTip("Configure the visible plan files and launch command.")
         act_config.triggered.connect(self._open_config)
 
+        pym.addSeparator()
+        act_viewer = pym.addAction("Open Bluesky Viewer")
+        act_viewer.setToolTip(
+            "Open the data viewer in a separate, independent window/process."
+        )
+        act_viewer.triggered.connect(self._open_viewer)
+
+        self._act_autopilot = pym.addAction("AutoPILOT")
+        self._act_autopilot.setCheckable(True)
+        self._act_autopilot.setChecked(
+            autopilot_bridge.AVAILABLE and bool(config.get("autopilot_enabled"))
+        )
+        if autopilot_bridge.AVAILABLE:
+            self._act_autopilot.setToolTip("Show/hide the AutoPILOT chat panel.")
+        else:
+            self._act_autopilot.setEnabled(False)
+            self._act_autopilot.setToolTip(
+                "AutoPILOT was not found (or its dependencies aren't "
+                "installed) next to this B-PILOT checkout."
+            )
+        self._act_autopilot.toggled.connect(self._on_autopilot_toggled)
+
         m = self.menuBar().addMenu("&Console")
         self._act_attach = m.addAction("Attach to running kernel…")
         self._act_attach.triggered.connect(self._attach_console)
@@ -321,6 +274,9 @@ class MainWindow(QtWidgets.QMainWindow):
             device_source.set_beamline(config.get("beamline"))
             self.runner.apply_config()
             self._sync_autopilot_dock()
+            self._act_autopilot.blockSignals(True)
+            self._act_autopilot.setChecked(bool(config.get("autopilot_enabled")))
+            self._act_autopilot.blockSignals(False)
             self._set_toolbar_status("Configuration saved.")
             if (
                 config.get("ui_scale") != old_scale
@@ -332,6 +288,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     "Restart required",
                     "Restart B-PILOT for the new appearance settings to take effect.",
                 )
+
+    def _on_autopilot_toggled(self, checked: bool) -> None:
+        config.update({"autopilot_enabled": checked})
+        self._sync_autopilot_dock()
 
     def _sync_autopilot_dock(self) -> None:
         """Create or tear down the AutoPILOT chat dock to match the current
@@ -368,16 +328,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console.shutdown()
         self.console.reset_view()
         self._reset_console_ui()
+        self.session_log.load(None)   # own kernel gone — drop the old transcript
         self._launch_console()
 
     # ── Console lifecycle ───────────────────────────────────────────────────────
 
     def _launch_console(self) -> None:
-        """Launch per the selected mode: embedded kernel, or external script."""
-        if self._is_script_mode():
-            self._launch_via_script()
-        else:
-            self._launch_embedded()
+        self._launch_embedded()
 
     def _launch_embedded(self) -> None:
         work_dir = self._workdir.text().strip() or _DEFAULT_LAUNCH_DIR
@@ -396,41 +353,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_toolbar_status("Starting IPython…", error=False)
         # Let the label paint before the (brief) kernel spin-up blocks.
         QtCore.QTimer.singleShot(0, lambda: self.console.start(cwd=work_dir))
-
-    def _launch_via_script(self) -> None:
-        """Run the configured launcher (blueskyStarter.sh) with the GUI args."""
-        script = config.get("launch_script")
-        if not script or not os.path.exists(script):
-            self._set_toolbar_status(
-                f"Launch script not found: {script or '(unset)'} "
-                "— set it in Python → Configuration.", error=True)
-            return
-        dm = self._dm_exp.text().strip()
-        if not dm:
-            self._set_toolbar_status(
-                "Enter an Experiment name (arg 1 to the launch script).", error=True)
-            return
-        setup = self._setup_file.text().strip() or "exp_setup.yml"
-        run_mode = self._run_mode.currentData() or "screen"
-        config.update({"dm_experiment": dm, "setup_file": setup,
-                       "script_run_mode": run_mode})   # persist the args
-
-        work_dir = self._workdir.text().strip() or _DEFAULT_LAUNCH_DIR
-        cwd = work_dir if os.path.isdir(work_dir) else None
-        try:
-            subprocess.Popen(
-                ["bash", script, dm, setup, run_mode],
-                cwd=cwd, start_new_session=True,
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._set_toolbar_status(f"Could not run launch script: {exc}", error=True)
-            return
-        msg = f"Ran {os.path.basename(script)} {dm} {setup} {run_mode}."
-        if run_mode == "screen":
-            msg += f"  Attach in a terminal:  screen -r bluesky_{dm}"
-        self._set_toolbar_status(msg)
 
     def _attach_console(self) -> None:
         """Reconnect to this beamline's running kernel (or a picked connection file)."""
@@ -558,6 +480,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console.shutdown()
         self.console.reset_view()
         self._reset_console_ui()
+        self.session_log.load(None)   # own kernel gone — drop the old transcript
         self._set_toolbar_status("Kernel shut down.")
 
     def _reset_console_ui(self) -> None:
@@ -572,7 +495,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_controls.set_console_ready(False)
         self.mode_buttons.set_console_ready(False)
         self.session_log.stop()   # kernel gone — stop polling (keep text visible)
-        self._apply_launch_mode()  # re-apply mode-specific control states
 
     def _load_bluesky(self) -> None:
         from . import config

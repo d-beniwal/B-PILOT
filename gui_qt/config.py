@@ -79,19 +79,13 @@ DEFAULTS: dict = {
     "beamline": "20ide",                  # identifies the one-kernel-per-beamline session
     "use_screen": True,                   # host the kernel in a named screen session
     "session_dir": _paths.SESSION_DIR_DEFAULT,  # fixed per-beamline runtime paths
-    # Launch mode — how the "Launch IPython" button starts a session:
-    #   "embedded" = GUI-managed ipykernel (attach/recorder/queue work)
-    #   "script"   = run an external launcher (blueskyStarter.sh) in a screen
-    "launch_mode": "embedded",
-    "launch_script": _paths.BLUESKY_STARTER,
-    # Starter for the EMBEDDED kernel: activates env + records experiment like
-    # blueskyStarter.sh, but starts a connectable ipykernel. Empty = launch a
-    # bare ipykernel directly (no env activation / collection import).
+    # Starter for the embedded kernel: activates env + records experiment,
+    # then starts a connectable ipykernel. Empty = launch a bare ipykernel
+    # directly (no env activation / collection import).
     "embedded_starter_script": _paths.EMBEDDED_STARTER,
-    # Arguments passed to the launch script:  <dm_experiment> <setup_file> <mode>
+    # Arguments recorded alongside the embedded kernel launch:
     "dm_experiment": "",
     "setup_file": "exp_setup.yml",
-    "script_run_mode": "screen",          # screen | console | lab
     # Display-only multiplier applied to every font/widget/window size at
     # startup (see style.SCALE) — for high-DPI screens (e.g. 4K). Takes
     # effect on the next launch, not live.
@@ -164,7 +158,6 @@ DEFAULTS: dict = {
 _WORKSTATION_KEYS = {
     "plans_dir",
     "import_root",
-    "launch_script",
     "embedded_starter_script",
     "session_dir",
     "last_kernel_connection_file",

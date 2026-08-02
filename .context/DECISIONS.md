@@ -16,6 +16,48 @@ to reconstruct later). Never rewrite history; add a new entry to supersede.
 > keeps only its one genuinely instrument/QS-scoped entry (2026-07-15,
 > adopting the two-layer `.context` system for that project).
 
+## 2026-08-01 — GUI layout cleanup: single launch mode, menu-ized viewer/AutoPILOT, shutdown clears the session log
+
+Four toolbar/menu changes requested to declutter the main window and fix a
+transcript carry-over bug, all confined to `gui_qt/`:
+
+- **"Launch script" mode removed entirely, not just hidden.** It never
+  worked with B-PILOT (the user's words) and was fully self-contained — a
+  repo-wide grep confirmed only `main_window.py`/`config.py`/
+  `config_dialog.py` referenced `launch_mode`/`launch_script`/
+  `script_run_mode`, so removal was safe with no other module affected.
+  Deleted the mode combo, `_launch_via_script()`, the "Run as" control, and
+  the config keys/dialog field outright (user's explicit choice over
+  leaving dead config behind) rather than just hardcoding embedded mode in
+  the UI. `dm_experiment`/`setup_file` were kept — they're read by the
+  embedded launcher too, not script-mode-only despite living in what used
+  to be called the "script params row".
+- **AutoPILOT gets a second toggle (Python menu, checkable action) instead
+  of replacing the Configuration → Appearance checkbox.** User's explicit
+  choice — both write the same `autopilot_enabled` config key and
+  `_sync_autopilot_dock()` call; `_open_config()` now also resyncs the menu
+  action's checked state after a Configuration save (via `blockSignals` to
+  avoid a redundant toggle round-trip) so the two controls can't drift out
+  of sync.
+- **Session log cleared on shutdown, not on attach — hooked at
+  `kernel_session.stop()`, not in the GUI layer.** The transcript file path
+  is a fixed per-beamline `kernel.log` (not per-launch), so previously a
+  shutdown followed by a fresh launch would show the old and new sessions
+  concatenated. `stop()` is only ever called for a kernel this GUI itself
+  started and is now killing (confirmed via `console_panel.py::shutdown()`,
+  which calls `shutdown_kernel(cf)` instead for an arbitrary/attached
+  kernel) — so adding `p["log"]` to `stop()`'s existing cf/sidecar cleanup
+  loop cleanly means attach-then-view-history is never affected, only an
+  intentional shutdown of our own kernel. `main_window.py`'s
+  `_shutdown_kernel()`/`_restart_kernel()` also blank the visible panel
+  immediately (`session_log.load(None)`) rather than waiting for the next
+  launch to overwrite stale text.
+- Verified via offscreen Qt smoke tests only (`MainWindow`/`ConfigDialog`
+  construct cleanly, expected widgets present/absent) — not yet click-tested
+  on a real desktop; flagged in STATE.md as the next verification step,
+  same caution as the 2026-07-24 usability round's dropdown-timing class of
+  bugs that offscreen testing can't catch.
+
 ## 2026-08-01 — Slice 7: docstring-drafting assistance, read-only and chat-only
 
 User wanted AutoPILOT to read a real plan file with non-compliant docstrings

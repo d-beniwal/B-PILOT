@@ -1,7 +1,7 @@
 # STATE — current snapshot
 
 _Keep this under ~1 page. Permanent history lives in DECISIONS.md, not here._
-_Last updated: 2026-08-01 (B-PILOT + AutoPILOT context consolidated into this file)_
+_Last updated: 2026-08-01 (GUI layout cleanup session)_
 
 ## Dev environment (this device)
 
@@ -25,11 +25,12 @@ backed by static device discovery) · per-beamline **profiles**
 Launch Session / Devices / Scan blocks / Data Viewer / Appearance) ·
 persistent detachable kernel with full session transcript · single-instance
 kernel per beamline (hosted in `screen`) · persistent run queue with runner +
-status panel · run controls (pause/resume/abort/halt) · two launch modes
-(embedded kernel vs external launch script) · databroker-backed viewer with
-catalog discovery + paginated run list · UI-scale multiplier · scan-building-
-block discovery (openers/per-steps/closers/suspenders, catalog only, not yet
-wired into the skeleton form).
+status panel · run controls (pause/resume/abort/halt) · single embedded-kernel
+launch path (the "Launch script" mode was removed 2026-08-01 — never worked
+with B-PILOT) · databroker-backed viewer (launched from Python → Open Bluesky
+Viewer) with catalog discovery + paginated run list · UI-scale multiplier ·
+scan-building-block discovery (openers/per-steps/closers/suspenders, catalog
+only, not yet wired into the skeleton form).
 
 ## AutoPILOT (optional agentic AI layer, folded into this repo 2026-07-31)
 
@@ -53,6 +54,15 @@ decline tools, never raw code execution. Drafts land in gitignored
 
 ## Now working on / not yet verified on redwood
 
+- **GUI layout cleanup round (2026-08-01)** — Browse button → icon button,
+  "Launch script" mode removed entirely (embedded-only now), "Open Bluesky
+  Viewer" + AutoPILOT moved from toolbar buttons into the Python menu
+  (AutoPILOT menu toggle kept in sync with the Configuration checkbox),
+  session-log transcript now cleared on kernel shutdown (file deleted +
+  panel blanked) but left untouched by attach. Offscreen-Qt-verified only
+  (window/dialog construction, widget presence) — needs a real desktop
+  click-test, especially the AutoPILOT menu↔checkbox sync and the
+  shutdown→relaunch log-clearing. See DECISIONS.md.
 - **B-PILOT usability follow-up round (2026-07-24)** — Build/Update button
   removed, Run notes reordered above Command, edit-mode highlighting, device
   categories back to dropdowns. Offscreen-Qt-verified only; needs a real
@@ -71,6 +81,9 @@ decline tools, never raw code execution. Drafts land in gitignored
 
 ## Next steps
 
+- **Desktop click-test the 2026-08-01 GUI layout cleanup** (see above) before
+  trusting it on redwood — offscreen Qt verification can't reproduce
+  focus/timing issues.
 - **Deploy B-PILOT on redwood (as s20iduser):** copy `B-PILOT/` →
   `/home/beams/S20IDUSER/bluesky/B-PILOT/`, then A/B the two launch modes.
   Revert dev-tree perms afterwards. See `.context/DEPLOY.md`.
@@ -112,11 +125,15 @@ decline tools, never raw code execution. Drafts land in gitignored
 
 ## Recent changes (last 3-5 sessions, dated; drop the oldest as it grows)
 
-- 2026-08-01: **This consolidation** — B-PILOT and AutoPILOT context merged
-  into `B-PILOT/CLAUDE.md` + `B-PILOT/.context/*`, retiring
-  `B-PILOT/AutoPILOT/CLAUDE.md`/`.context/*` and trimming
-  `mpe_bluesky/.context/*` back to instrument/QS-only content. Also:
-  AutoPILOT Slice 7 (docstring-drafting assist) shipped and pushed
+- 2026-08-01: **GUI layout cleanup** — Browse button → icon, "Launch script"
+  mode removed (`main_window.py`/`config.py`/`config_dialog.py`), Viewer +
+  AutoPILOT moved into the Python menu, session log cleared on shutdown but
+  preserved on attach (`kernel_session.py::stop()` now deletes `kernel.log`
+  too). See DECISIONS.md for the per-item reasoning.
+- 2026-08-01: B-PILOT and AutoPILOT context merged into `B-PILOT/CLAUDE.md`
+  + `B-PILOT/.context/*`, retiring `B-PILOT/AutoPILOT/CLAUDE.md`/`.context/*`
+  and trimming `mpe_bluesky/.context/*` back to instrument/QS-only content.
+  Also: AutoPILOT Slice 7 (docstring-drafting assist) shipped and pushed
   (`bc54ac9`).
 - 2026-07-31: AutoPILOT folded into this repo as a tracked subdirectory
   (commit `1c62ebe`), no longer a separate repo.
@@ -124,7 +141,4 @@ decline tools, never raw code execution. Drafts land in gitignored
 - 2026-07-24: B-PILOT usability follow-up round (see above) + scan-building-
   block discovery (`gui_qt/scan_building_discovery.py`, new Configuration
   tab) + AutoPILOT Slice 5 (chat-dock themes).
-- 2026-07-23: AutoPILOT Slice 4 (multi-turn agent loop, lookup tools,
-  conversation memory) + a full B-PILOT backend survey for future
-  agent/queue tooling.
 </content>

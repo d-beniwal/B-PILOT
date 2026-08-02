@@ -502,27 +502,17 @@ class ConfigDialog(QtWidgets.QDialog):
 
         srow = QtWidgets.QGridLayout()
         srow.setColumnStretch(1, 1)
-        self._launch_script = QtWidgets.QLineEdit()
-        self._launch_script.setToolTip(
-            "Shell script run by Launch when the toolbar Launch mode is set to "
-            "'Launch script' (e.g. blueskyStarter.sh). Called as:\n"
-            "  <script> <dm_experiment> <setup_file> <mode>"
-        )
-        srow.addWidget(S.LabelRight("Launch script:"), 0, 0)
-        srow.addWidget(self._launch_script, 0, 1)
-        srow.addWidget(self._browse_button(self._launch_script, kind="file"), 0, 2)
-
         self._embedded_starter = QtWidgets.QLineEdit()
         self._embedded_starter.setToolTip(
-            "Script run for the EMBEDDED kernel launch — activates the env + "
-            "records the experiment (like blueskyStarter.sh) but starts a "
-            "connectable ipykernel. Called as:\n"
+            "Script run for the embedded kernel launch — activates the env + "
+            "records the experiment, then starts a connectable ipykernel. "
+            "Called as:\n"
             "  <script> <dm_experiment> <setup_file> <connection_file> <screen>\n"
             "Leave blank to launch a bare kernel with no env activation."
         )
-        srow.addWidget(S.LabelRight("Embedded starter:"), 1, 0)
-        srow.addWidget(self._embedded_starter, 1, 1)
-        srow.addWidget(self._browse_button(self._embedded_starter, kind="file"), 1, 2)
+        srow.addWidget(S.LabelRight("Embedded starter:"), 0, 0)
+        srow.addWidget(self._embedded_starter, 0, 1)
+        srow.addWidget(self._browse_button(self._embedded_starter, kind="file"), 0, 2)
 
         card.body.addLayout(srow)
         return card
@@ -1140,7 +1130,6 @@ class ConfigDialog(QtWidgets.QDialog):
         self._keep_kernel.setChecked(bool(cfg["keep_kernel_on_exit"]))
         self._beamline.setText(cfg["beamline"])
         self._use_screen.setChecked(bool(cfg["use_screen"]))
-        self._launch_script.setText(cfg["launch_script"])
         self._embedded_starter.setText(cfg["embedded_starter_script"])
 
         theme_idx = self._theme.findData(cfg.get("theme", "light"))
@@ -1188,7 +1177,6 @@ class ConfigDialog(QtWidgets.QDialog):
             "keep_kernel_on_exit": self._keep_kernel.isChecked(),
             "beamline": self._beamline.text().strip(),
             "use_screen": self._use_screen.isChecked(),
-            "launch_script": self._launch_script.text().strip(),
             "embedded_starter_script": self._embedded_starter.text().strip(),
             "theme": self._theme.currentData(),
             "font_family": self._font_family.currentData(),

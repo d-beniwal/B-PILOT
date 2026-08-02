@@ -364,7 +364,10 @@ def stop(beamline: str) -> bool:
     Ordered so it works regardless of file-descriptor state or hosting mode:
     a socket-light shutdown request (no heartbeat thread), then ``screen -X
     quit`` (screen mode), then a PID kill fallback (no-screen mode / GUI
-    restart), then file cleanup.
+    restart), then file cleanup — including the transcript log, so a fresh
+    kernel started later doesn't inherit this session's history (an attach
+    to a still-running kernel never reaches this function, so its log is
+    left untouched).
     """
     p = paths(beamline)
     cf = p["connection_file"]
@@ -380,7 +383,7 @@ def stop(beamline: str) -> bool:
             ended = True
         except OSError:
             pass
-    for f in (cf, p["sidecar"]):
+    for f in (cf, p["sidecar"], p["log"]):
         try:
             os.remove(f)
         except OSError:
