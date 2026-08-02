@@ -1,6 +1,6 @@
 """Puts B-PILOT's ``gui_qt`` package on ``sys.path`` so AutoPILOT can reuse its
 Qt-free backend modules (``config``, ``device_discovery``, ``device_source``,
-``plan_parser``) directly instead of re-implementing them.
+``plan_parser``, ``databroker_access``) directly instead of re-implementing them.
 
 This is the one allowed dependency direction (AutoPILOT -> B-PILOT). B-PILOT's
 own code must never import anything from ``AutoPILOT/`` -- see

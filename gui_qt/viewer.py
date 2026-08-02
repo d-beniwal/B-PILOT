@@ -45,170 +45,31 @@ from PyQt5 import QtWidgets  # noqa: E402
 
 if __package__:
     from . import config as _config
-    from . import paths as _paths
+    from . import databroker_access as _dba
     from . import style as S
 else:  # allow `python gui_qt/viewer.py`
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from gui_qt import config as _config
-    from gui_qt import paths as _paths
+    from gui_qt import databroker_access as _dba
     from gui_qt import style as S
 
-# MPE instrument config lives at <project_root>/instrument/iconfig.yml.
-_ICONFIG = _paths.ICONFIG
-_PAGE_SIZE = 500  # runs fetched per page (catalogs can hold tens of thousands)
-
-# Fallback catalog name if it can't be resolved from iconfig by account.
-# 20-ID-E (s20iduser) uses 'hexm'; see instrument/iconfig.yml.
-_DEFAULT_CATALOG = "hexm"
+_PAGE_SIZE = _dba.PAGE_SIZE  # runs fetched per page (catalogs can hold tens of thousands)
 
 
 # ── Catalog access ──────────────────────────────────────────────────────────────
-
-def _catalog_from_iconfig() -> str:
-    """Catalog name for the current account from iconfig.yml (best effort).
-
-    ``iconfig.yml`` maps each MPE account to a ``DATABROKER_CATALOG`` (e.g.
-    ``s20iduser`` → ``hexm``).  Falls back to :data:`_DEFAULT_CATALOG` if the
-    file, the account entry, or the key is missing.
-    """
-    import getpass
-
-    try:
-        import yaml
-
-        with open(_ICONFIG, encoding="utf-8") as fh:
-            cfg = yaml.safe_load(fh) or {}
-        acct = cfg.get(getpass.getuser())
-        if isinstance(acct, dict) and acct.get("DATABROKER_CATALOG"):
-            return str(acct["DATABROKER_CATALOG"])
-    except Exception:  # noqa: BLE001
-        pass
-    return _DEFAULT_CATALOG
-
-
-def load_defaults() -> dict:
-    """Connection defaults: the active profile's settings, else iconfig.yml auto-detect.
-
-    ``databroker_catalog`` (Configuration → Data Viewer) takes priority when
-    set; an empty profile value preserves the original zero-config behavior
-    of guessing the catalog from the logged-in account.
-    """
-    catalog = _config.get("databroker_catalog") or _catalog_from_iconfig()
-    return {
-        "catalog": catalog,
-        "uri": _config.get("databroker_uri") or "",
-        "nexus_dir": _config.get("databroker_nexus_dir") or "",
-    }
-
-
-def connect_catalog(catalog: str, uri: str = "") -> tuple:
-    """Return (catalog_obj, status_message).  Falls back to a temp catalog.
-
-    Priority: explicit **Tiled URI** (optional override) → named **databroker
-    catalog** → empty temporary catalog.  A live connection is only opened when
-    the user clicks *Connect* (the window never auto-connects).
-    """
-    if uri:
-        try:
-            from tiled.client import from_uri
-
-            client = from_uri(uri)
-            return client, f"Connected to Tiled URI {uri}"
-        except Exception as exc:  # noqa: BLE001
-            return _temp_catalog(f"Tiled URI {uri} failed ({_short(exc)})")
-    if catalog:
-        try:
-            import databroker
-
-            cat = databroker.catalog[catalog]
-            return cat, f"Connected to databroker catalog '{catalog}'"
-        except KeyError:
-            return _temp_catalog(
-                f"catalog '{catalog}' not found — check ~/.local/share/intake/*.yml"
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _temp_catalog(f"catalog '{catalog}' failed ({_short(exc)})")
-    return _temp_catalog("no catalog/URI configured")
-
-
-def _temp_catalog(reason: str) -> tuple:
-    """Empty temporary databroker catalog (dev fallback)."""
-    try:
-        import databroker
-
-        return databroker.temp().v2, f"⚠ {reason} — showing empty temp catalog"
-    except Exception as exc:  # noqa: BLE001
-        return None, f"✗ no catalog: {reason}; temp fallback failed ({_short(exc)})"
-
-
-def _meta(run) -> tuple[dict, dict]:
-    """Return (start_doc, stop_doc) for a run, tolerant of catalog flavour."""
-    md = getattr(run, "metadata", None) or {}
-    try:
-        start = dict(md.get("start") or {})
-    except Exception:  # noqa: BLE001
-        start = {}
-    try:
-        stop = dict(md.get("stop") or {})
-    except Exception:  # noqa: BLE001
-        stop = {}
-    return start, stop
-
-
-def _all_uids(cat) -> list:
-    """Every run uid in the catalog, in catalog-native order.
-
-    This is the expensive part on a large remote MongoDB catalog — callers
-    should fetch it once per connection and reuse it across page turns
-    rather than re-listing the whole catalog on every page (which is what
-    made every page navigation redo this from scratch).
-    """
-    try:
-        return list(cat)
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _page_from_uids(cat, uids: list, offset: int, limit: int = _PAGE_SIZE, progress_cb=None) -> list:
-    """Return [(uid, start, stop), …] for one page, newest first.
-
-    ``databroker`` catalogs iterate **newest-first** natively (the same
-    convention behind ``catalog[-1]`` meaning "most recent run" — the
-    underlying Mongo query sorts by ``time`` descending), so ``offset``
-    counts *forward* from the head of ``uids``: 0 is the most recent page.
-    A previous version of this counted backward from the tail assuming
-    oldest-first order, which was backwards in practice — it showed the
-    *oldest* runs on page 1 instead of the newest (see DECISIONS.md).
-    ``progress_cb(done, total)`` — if given — is invoked periodically while
-    fetching per-run metadata, since that's a per-uid catalog round-trip and
-    can be slow on a remote MongoDB catalog.
-    """
-    window = uids[offset:offset + limit]
-    out: list[tuple] = []
-    for i, uid in enumerate(window):
-        try:
-            start, stop = _meta(cat[uid])
-            out.append((uid, start, stop))
-        except Exception:  # noqa: BLE001
-            continue
-        if progress_cb is not None and (i % 25 == 0 or i == len(window) - 1):
-            progress_cb(i + 1, len(window))
-    out.sort(key=lambda t: t[1].get("time", 0), reverse=True)
-    return out
-
-
-def list_runs(cat, offset: int = 0, limit: int = _PAGE_SIZE, progress_cb=None) -> tuple[list, int, list]:
-    """Return ([(uid, start, stop), …], total, uids) for one page, newest first.
-
-    Convenience wrapper used for the initial connect, where there is no uid
-    list to reuse yet. ``uids`` is returned so the caller can cache it for
-    subsequent page turns via :func:`_page_from_uids` instead of calling this
-    (and re-listing the whole catalog) again.
-    """
-    uids = _all_uids(cat)
-    total = len(uids)
-    rows = _page_from_uids(cat, uids, offset, limit, progress_cb=progress_cb)
-    return rows, total, uids
+# Implementation lives in gui_qt/databroker_access.py (Qt-free, shared with
+# AutoPILOT's read-only data tools) -- re-exported here unchanged so this
+# file's own call sites (and anything importing gui_qt.viewer for these
+# names) keep working as before.
+load_defaults = _dba.load_defaults
+connect_catalog = _dba.connect_catalog
+meta = _dba.meta
+read_stream_df = _dba.read_stream_df
+all_uids = _dba.all_uids
+page_from_uids = _dba.page_from_uids
+list_runs = _dba.list_runs
+list_catalogs = _dba.list_catalogs
+_short = _dba.short
 
 
 def _page_window(current: int, total: int, radius: int = 2) -> list:
@@ -237,21 +98,6 @@ def _page_window(current: int, total: int, radius: int = 2) -> list:
     return out
 
 
-def list_catalogs() -> tuple[list[str], str]:
-    """Return (names, error) — every catalog registered for this account.
-
-    Backed by ``databroker.catalog``, a dict-like registry populated from
-    ``~/.local/share/intake/*.yml``. Best effort: on any failure, returns an
-    empty list and a short error message instead of raising.
-    """
-    try:
-        import databroker
-
-        return sorted(str(name) for name in databroker.catalog), ""
-    except Exception as exc:  # noqa: BLE001
-        return [], _short(exc)
-
-
 # ── Formatting helpers ──────────────────────────────────────────────────────────
 
 def _fmt_time(epoch) -> str:
@@ -272,12 +118,6 @@ def _esc(v) -> str:
     import html
 
     return html.escape(str(v))
-
-
-def _short(value, limit: int = 160) -> str:
-    """Truncate a (possibly huge) message so it can't blow up the layout."""
-    s = str(value).replace("\n", " ")
-    return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
 def _payload_to_text(payload: dict) -> str:
@@ -341,7 +181,7 @@ class _CatalogWorker(QtCore.QObject):
         """Full uid listing for ``cat``, from cache when it's still current."""
         if cat is self._uids_cat:
             return self._uids_cache
-        uids = _all_uids(cat)
+        uids = all_uids(cat)
         self._uids_cat = cat
         self._uids_cache = uids
         return uids
@@ -363,7 +203,7 @@ class _CatalogWorker(QtCore.QObject):
                         self.progress.emit("Listing runs…")
                         uids = self._uids_for(cat)
                         total = len(uids)
-                        rows = _page_from_uids(
+                        rows = page_from_uids(
                             cat, uids, 0, _PAGE_SIZE, progress_cb=self._report_progress
                         )
                 except Exception as exc:  # noqa: BLE001
@@ -374,7 +214,7 @@ class _CatalogWorker(QtCore.QObject):
                 try:
                     uids = self._uids_for(cat)
                     total = len(uids)
-                    rows = _page_from_uids(
+                    rows = page_from_uids(
                         cat, uids, offset, _PAGE_SIZE, progress_cb=self._report_progress
                     )
                     self.paged.emit(rows, total, "")
@@ -582,7 +422,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if not streams:
             return None
         stream = "primary" if "primary" in streams else streams[0]
-        return self._read_stream_df(run, stream)
+        return read_stream_df(run, stream)
 
     # ── Toolbar (connection config) ─────────────────────────────────────────────
 
@@ -985,7 +825,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return
         stream = "primary" if "primary" in streams else streams[0]
         self._data_info.setText(f"Streams: {', '.join(streams)} — showing '{stream}'.")
-        df = self._read_stream_df(run, stream)
+        df = read_stream_df(run, stream)
         if df is None:
             self._data_info.setText(
                 f"Streams: {', '.join(streams)} — preview of '{stream}' unavailable "
@@ -993,38 +833,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
             )
             return
         self._show_df(df.head(100))
-
-    @staticmethod
-    def _read_stream_df(run, stream):
-        """Best-effort: return a pandas DataFrame of scalar columns, or None."""
-        node = None
-        try:
-            node = run[stream]
-        except Exception:  # noqa: BLE001
-            return None
-        ds = None
-        for reader in (
-            lambda: node.read(),
-            lambda: node["data"].read(),
-            lambda: node.to_dask(),
-        ):
-            try:
-                ds = reader()
-                break
-            except Exception:  # noqa: BLE001
-                continue
-        if ds is None:
-            return None
-        try:
-            df = ds.to_dataframe() if hasattr(ds, "to_dataframe") else ds
-            # keep only scalar-per-event columns (drop image/array fields)
-            keep = [
-                c for c in df.columns
-                if df[c].map(lambda x: getattr(x, "ndim", 0)).max() == 0
-            ]
-            return df[keep] if keep else df
-        except Exception:  # noqa: BLE001
-            return None
 
     def _show_df(self, df) -> None:
         self._data_table.clear()

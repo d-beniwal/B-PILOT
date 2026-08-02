@@ -30,6 +30,9 @@ _LOOKUP_TOOL_NAMES = {
     tools.LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME,
     tools.READ_PLAN_FILE_TOOL_NAME,
     tools.VALIDATE_DOCSTRING_TOOL_NAME,
+    tools.SEARCH_RUNS_TOOL_NAME,
+    tools.DESCRIBE_RUN_TOOL_NAME,
+    tools.READ_RUN_DATA_TOOL_NAME,
 }
 
 
@@ -106,6 +109,21 @@ def _build_system_prompt(catalog) -> str:
     )
     lines.append("")
     lines.append(
+        "You can also answer questions about runs already recorded on this "
+        "beamline, using `search_runs`, `describe_run`, and `read_run_data` "
+        "-- read-only historical lookups against this beamline's own data "
+        "catalog (resolved automatically from the active profile; you never "
+        "see or need a raw catalog URI). They never affect or execute "
+        "anything. `search_runs` filters by plan name, exit status, scan_id, "
+        "or a date range; `describe_run` gets one run's full metadata by uid "
+        "or scan_id; `read_run_data` summarizes one run's scalar data "
+        "(min/max/mean, not the raw per-event stream). If the catalog is "
+        "unreachable or misconfigured, say so plainly. Never fabricate a "
+        "run's data, parameters, or outcome -- if these tools can't answer "
+        "the question, say so rather than guessing."
+    )
+    lines.append("")
+    lines.append(
         "You never execute plans, run code, or control hardware -- you only "
         "draft a plan file or fill in B-PILOT's own form for a human to "
         "review and run themselves. If a message asks you to actually run, "
@@ -179,6 +197,9 @@ def converse(
         tools.build_list_scan_building_blocks_schema(),
         tools.build_read_plan_file_schema(),
         tools.build_validate_docstring_schema(),
+        tools.build_search_runs_schema(),
+        tools.build_describe_run_schema(),
+        tools.build_read_run_data_schema(),
     ]
 
     system = _build_system_prompt(catalog)
@@ -220,8 +241,19 @@ def converse(
                 result_data = tools.list_scan_building_blocks(plan_catalog.building_blocks(profile))
             elif tool_use.name == tools.READ_PLAN_FILE_TOOL_NAME:
                 result_data = tools.read_plan_file(tool_use.input.get("path", ""))
-            else:
+            elif tool_use.name == tools.VALIDATE_DOCSTRING_TOOL_NAME:
                 result_data = tools.validate_docstring(tool_use.input.get("drafts", []))
+            elif tool_use.name == tools.SEARCH_RUNS_TOOL_NAME:
+                result_data = tools.search_runs(profile, **tool_use.input)
+            elif tool_use.name == tools.DESCRIBE_RUN_TOOL_NAME:
+                result_data = tools.describe_run(profile, tool_use.input.get("run_id", ""))
+            else:
+                result_data = tools.read_run_data(
+                    profile,
+                    tool_use.input.get("run_id", ""),
+                    stream=tool_use.input.get("stream") or "primary",
+                    columns=tool_use.input.get("columns"),
+                )
             messages.append(
                 {
                     "role": "user",

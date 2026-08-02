@@ -1,16 +1,20 @@
 """Read-only lookup tools available to the multi-turn agent loop in `pipeline.py`,
 alongside the propose/decline/ask_user tools in `plan_spec.py`.
 
-Both wrap data AutoPILOT already loads per request (the active profile's
-`DeviceCatalog`, `plan_context.TEMPLATES`) -- no new `gui_qt` imports, no
-network calls, nothing that could reach hardware. These exist so the model
-can double-check a device name or discover what plan types actually exist
-instead of confidently guessing when it isn't sure.
+Most wrap data AutoPILOT already loads per request (the active profile's
+`DeviceCatalog`, `plan_context.TEMPLATES`) -- no network calls, nothing that
+could reach hardware. The search_runs/describe_run/read_run_data tools are
+the exception: they read already-recorded run metadata/data from this
+beamline's databroker catalog (via `data_catalog.py`, Mongo reads only,
+still never touching hardware or the RunEngine). These exist so the model
+can double-check a device name, discover what plan types actually exist, or
+look up a real recorded run instead of confidently guessing when it isn't sure.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+from . import data_catalog
 from .device_catalog import DeviceCatalog
 from .plan_catalog import PlanInfo
 from .plan_context import TEMPLATES
@@ -28,6 +32,9 @@ DESCRIBE_PLAN_TOOL_NAME = "describe_plan"
 LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME = "list_scan_building_blocks"
 READ_PLAN_FILE_TOOL_NAME = "read_plan_file"
 VALIDATE_DOCSTRING_TOOL_NAME = "validate_docstring"
+SEARCH_RUNS_TOOL_NAME = "search_runs"
+DESCRIBE_RUN_TOOL_NAME = "describe_run"
+READ_RUN_DATA_TOOL_NAME = "read_run_data"
 
 
 def build_list_devices_schema() -> dict:
@@ -323,3 +330,115 @@ def validate_docstring(drafts: list[dict]) -> dict:
         check = bpilot_plan_parser.validate_docstring_text(draft.get("docstring", ""), draft.get("arg_names"))
         results.append({"function_name": draft.get("function_name"), **check})
     return {"results": results}
+
+
+def build_search_runs_schema() -> dict:
+    return {
+        "name": SEARCH_RUNS_TOOL_NAME,
+        "description": (
+            "Search runs already recorded in this beamline's data catalog "
+            "(the active profile's configured databroker catalog -- never a "
+            "raw URI or credential). Read-only historical lookup, newest "
+            "first; never affects or executes anything. Use this to answer "
+            "questions like 'how many expose runs aborted' or 'what scans "
+            "ran yesterday' before guessing."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plan_name": {
+                    "type": "string",
+                    "description": "Exact plan name to filter by, e.g. 'expose' or 'mpe_step_grid_scan'.",
+                },
+                "exit_status": {
+                    "type": "string",
+                    "enum": ["success", "abort", "fail"],
+                    "description": "Filter by how the run ended.",
+                },
+                "scan_id": {
+                    "type": "integer",
+                    "description": "Filter to one specific scan_id.",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "ISO date/time lower bound, e.g. '2026-07-01'.",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "ISO date/time upper bound, e.g. '2026-07-31'.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max runs to return, default 20, capped at 100.",
+                },
+            },
+            "required": [],
+        },
+    }
+
+
+def build_describe_run_schema() -> dict:
+    return {
+        "name": DESCRIBE_RUN_TOOL_NAME,
+        "description": (
+            "Get full metadata for one already-recorded run: start/stop "
+            "documents (noisy internal fields stripped), stream names, and "
+            "event counts. Use this before answering any question about a "
+            "specific run's parameters or outcome."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "string",
+                    "description": "Full or partial run uid, or a numeric scan_id, as a string.",
+                }
+            },
+            "required": ["run_id"],
+        },
+    }
+
+
+def build_read_run_data_schema() -> dict:
+    return {
+        "name": READ_RUN_DATA_TOOL_NAME,
+        "description": (
+            "Summarize one already-recorded run's scalar data stream: "
+            "per-column min/max/mean/first/last plus a short head/tail "
+            "preview. Never returns raw per-event data in full -- use "
+            "columns from describe_run's motor/detector list to narrow "
+            "large streams. Use this to answer questions about what a "
+            "motor or detector actually did during a run."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "string",
+                    "description": "Full or partial run uid, or a numeric scan_id, as a string.",
+                },
+                "stream": {
+                    "type": "string",
+                    "description": "Stream name, default 'primary'.",
+                },
+                "columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional column names to restrict the summary to.",
+                },
+            },
+            "required": ["run_id"],
+        },
+    }
+
+
+def search_runs(profile: str | None, **kwargs) -> dict:
+    return data_catalog.search_runs(profile, **kwargs)
+
+
+def describe_run(profile: str | None, run_id: str) -> dict:
+    return data_catalog.describe_run(profile, run_id)
+
+
+def read_run_data(profile: str | None, run_id: str, stream: str = "primary", columns: list | None = None) -> dict:
+    return data_catalog.read_run_data(profile, run_id, stream=stream, columns=columns)
