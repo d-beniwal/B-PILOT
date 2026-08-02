@@ -147,6 +147,28 @@ class _ComposerBox(QtWidgets.QTextEdit):
         )
 
 
+# Qt's rich-text engine has no flexbox and ignores CSS `max-width` on
+# <table>/<div> (verified empirically), so a percentage-only bubble width
+# grows with the dock and stops wrapping once the dock is wide enough to fit
+# a whole message on one line. Capping at a literal pixel width keeps bubbles
+# at a comfortable reading width regardless of dock/window size.
+_BUBBLE_MAX_WIDTH_PX = 640
+
+
+def _html_style_font_family(font_family: str) -> str:
+    """`bpilot_style.MONO_CSS`/theme font stacks quote multi-word font names
+    with `"` (correct CSS, and fine when used in a QSS stylesheet), but here
+    they get spliced into an HTML `style="..."` attribute -- the embedded `"`
+    closes that attribute early and corrupts the rest of the tag. Verified
+    this silently drops `white-space:pre-wrap` on the debug `<pre>` block,
+    so it falls back to `<pre>`'s true default (no wrap at all) -- the actual
+    cause of "raw: {...}" rendering as one unbroken line. Single quotes are
+    equally valid CSS for a quoted font name and don't collide with the
+    surrounding double-quoted HTML attribute.
+    """
+    return font_family.replace('"', "'")
+
+
 def _bubble_html(
     header: str,
     body_html: str,
@@ -157,19 +179,24 @@ def _bubble_html(
     fg: str,
     muted: str,
     font_px: int,
+    container_width: int,
     font_family: str = "inherit",
 ) -> str:
-    """One chat bubble as a fixed-width-percentage table (Qt rich text has no
+    """One chat bubble as a fixed-width table (Qt rich text has no
     flexbox/border-radius, so alignment + background are faked this way).
 
     `border`/`muted` come from the active theme (not always B-PILOT's own
     palette) so a bubble's frame and caption stay legible against whichever
-    theme's background/text colors are in use.
+    theme's background/text colors are in use. `container_width` is the
+    transcript viewport's current width in pixels, used to size the bubble to
+    78% of it, capped at `_BUBBLE_MAX_WIDTH_PX` so wide/floating docks don't
+    turn messages into one long unwrapped line.
     """
     header_px = max(8, font_px - 2)
-    font_rule = "" if font_family == "inherit" else f"font-family:{font_family};"
+    font_rule = "" if font_family == "inherit" else f"font-family:{_html_style_font_family(font_family)};"
+    bubble_px = max(200, min(int(container_width * 0.78), _BUBBLE_MAX_WIDTH_PX))
     return (
-        f'<table align="{align}" width="78%" cellpadding="8" cellspacing="0" style="margin:4px 0;">'
+        f'<table align="{align}" width="{bubble_px}" cellpadding="8" cellspacing="0" style="margin:4px 0;">'
         f"<tr><td style=\"background-color:{bg}; border:1px solid {border};\">"
         f'<div style="color:{muted}; font-size:{header_px}px; font-weight:bold; {font_rule}">{header}</div>'
         f'<div style="color:{fg}; font-size:{font_px}px; {font_rule}">{body_html}</div>'
@@ -302,7 +329,7 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         html = _bubble_html(
             "You", body_html, align="right", bg=s["user_bubble_bg"], border=self._theme.border,
             fg=s["user_text_color"], muted=self._theme.muted, font_px=s["font_size"],
-            font_family=self._theme.font_family,
+            container_width=self._transcript.viewport().width(), font_family=self._theme.font_family,
         )
         self._transcript.append(html)
         self._scroll_to_bottom()
@@ -324,7 +351,7 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         html = _bubble_html(
             header, body_html, align="left", bg=s["assistant_bubble_bg"], border=self._theme.border,
             fg=s["assistant_text_color"], muted=self._theme.muted, font_px=s["font_size"],
-            font_family=self._theme.font_family,
+            container_width=self._transcript.viewport().width(), font_family=self._theme.font_family,
         )
         self._transcript.append(html)
         self._scroll_to_bottom()
@@ -341,6 +368,7 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         debug_px = max(8, self._settings["font_size"] - 2)
         theme = self._theme
         font_family = bpilot_style.MONO_CSS if theme.font_family == "inherit" else theme.font_family
+        font_family = _html_style_font_family(font_family)
         return (
             f'<pre style="background-color:{theme.panel}; border:1px solid {theme.border}; '
             f'font-family:{font_family}; font-size:{debug_px}px; padding:4px; '
