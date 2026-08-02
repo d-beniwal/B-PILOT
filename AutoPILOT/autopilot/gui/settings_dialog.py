@@ -82,6 +82,7 @@ class AutoPilotSettingsDialog(QtWidgets.QDialog):
         outer.addWidget(self._build_model_card())
         outer.addWidget(self._build_appearance_card())
         outer.addWidget(self._build_advanced_card())
+        outer.addWidget(self._build_testing_card())
         outer.addStretch(1)
         outer.addLayout(self._build_buttons())
 
@@ -201,6 +202,32 @@ class AutoPilotSettingsDialog(QtWidgets.QDialog):
         card.body.addWidget(note)
         return card
 
+    def _build_testing_card(self) -> QtWidgets.QWidget:
+        card = bpilot_style.make_card("Testing (local only)")
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(bpilot_style.LabelRight("Catalog override:"))
+        self._catalog_override = QtWidgets.QLineEdit()
+        self._catalog_override.setPlaceholderText("e.g. hexm_test")
+        self._catalog_override.setToolTip(
+            "Overrides the active profile's configured databroker catalog for "
+            "AutoPILOT's data-lookup tools only (search_runs / describe_run / "
+            "read_run_data) -- does not affect scan drafting, and does not "
+            "change the profile's own configuration. Also ignores the "
+            "profile's databroker_uri. Leave blank on the real beamline."
+        )
+        row.addWidget(self._catalog_override, 1)
+        card.body.addLayout(row)
+
+        note = QtWidgets.QLabel(
+            "Leave blank to use the active profile's configured catalog (the normal, "
+            "correct setting on the real beamline)."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {bpilot_style.MUTED}; font-size: {bpilot_style.px(10)}px;")
+        card.body.addWidget(note)
+        return card
+
     def _build_buttons(self) -> QtWidgets.QLayout:
         row = QtWidgets.QHBoxLayout()
         restore_btn = QtWidgets.QPushButton("Restore Defaults")
@@ -233,6 +260,7 @@ class AutoPilotSettingsDialog(QtWidgets.QDialog):
             btn.refresh()
         self._base_url.setText(values.get("argo_base_url", ""))
         self._api_key.setText(values.get("argo_api_key", ""))
+        self._catalog_override.setText(values.get("databroker_catalog_override", ""))
 
     def values(self) -> dict:
         result = {
@@ -243,6 +271,7 @@ class AutoPilotSettingsDialog(QtWidgets.QDialog):
             "font_size": self._font_size.value(),
             "argo_base_url": self._base_url.text().strip(),
             "argo_api_key": self._api_key.text().strip(),
+            "databroker_catalog_override": self._catalog_override.text().strip(),
         }
         for key, btn in self._color_buttons.items():
             result[key] = btn.color

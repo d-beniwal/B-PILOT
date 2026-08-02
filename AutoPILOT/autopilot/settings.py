@@ -34,6 +34,11 @@ DEFAULTS: dict = {
     # Advanced: Argo connection overrides (blank -> env vars / defaults)
     "argo_base_url": "",
     "argo_api_key": "",
+    # Testing (local only): overrides the active profile's databroker_catalog
+    # for AutoPILOT's data-lookup tools (search_runs/describe_run/
+    # read_run_data) only -- never the profile config itself. Blank on the
+    # real beamline; see data_catalog.py's _catalog_key().
+    "databroker_catalog_override": "",
 }
 
 

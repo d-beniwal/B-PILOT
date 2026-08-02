@@ -28,6 +28,7 @@ from __future__ import annotations
 import socket
 from datetime import datetime
 
+from . import settings
 from ._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
@@ -85,6 +86,13 @@ def _ensure_socket_timeout() -> None:
 
 
 def _catalog_key(profile: str | None) -> tuple[str, str]:
+    # Local-testing escape hatch: overrides the profile's catalog (and drops
+    # its databroker_uri too, since connect_catalog() prioritizes a Tiled URI
+    # over a named catalog and a local test catalog is always named, never a
+    # Tiled URI) -- see settings.py's databroker_catalog_override docstring.
+    override = settings.load().get("databroker_catalog_override")
+    if override:
+        return str(override), ""
     values = bpilot_config.profile_values(profile) if profile else bpilot_config.as_dict()
     return str(values.get("databroker_catalog") or ""), str(values.get("databroker_uri") or "")
 

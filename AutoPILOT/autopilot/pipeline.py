@@ -52,6 +52,14 @@ class PlanResult:
     # `RE(<real_plan>(...))` string ready for
     # PlanRunnerPanel.load_from_command() (see chat_panel.py's "Open in form").
     gui_command: str | None = None
+    # Summed across every turn of this converse() call (a single user message
+    # can cost several API calls via the lookup-tool loop) -- see converse()'s
+    # `usage` accumulator. cache_read reflects prompt-caching savings on the
+    # (large, static) system prompt; cache_creation is omitted, only nonzero
+    # on the first turn that writes the cache breakpoint, not useful here.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
 
 
 def _build_system_prompt(catalog) -> str:
@@ -206,140 +214,178 @@ def converse(
     messages = list(history) if history else []
     messages.append({"role": "user", "content": request})
 
-    tool_calls: list[str] = []
-    terminal: tuple[str, dict] | None = None
-    final_text: str | None = None
+    # Summed across every turn below (one user message can cost several API
+    # calls via the lookup-tool loop) -- attached to whichever PlanResult
+    # `_run_turns()` returns, once, right before converse() returns it. A
+    # closed-over dict rather than a `nonlocal` counter since every branch
+    # below mutates it in place and never rebinds it.
+    usage = {"input": 0, "output": 0, "cache_read": 0}
 
-    for _ in range(max_turns):
-        try:
-            resp = client.call(system, messages, all_tools, temperature=temperature)
-        except Exception as exc:  # noqa: BLE001 -- surface any Argo/network failure to the caller
-            return (
-                PlanResult(ok=False, message=f"Argo call failed: {exc}", model=client.model, tool_calls=tool_calls or None),
-                messages,
-            )
+    def _run_turns() -> tuple[PlanResult, list[dict]]:
+        tool_calls: list[str] = []
+        terminal: tuple[str, dict] | None = None
+        final_text: str | None = None
 
-        messages.append({"role": "assistant", "content": resp.content})
-
-        tool_use = next((block for block in resp.content if block.type == "tool_use"), None)
-        if tool_use is None:
-            final_text = "".join(block.text for block in resp.content if block.type == "text").strip()
-            break
-
-        tool_calls.append(tool_use.name)
-
-        if tool_use.name in _LOOKUP_TOOL_NAMES:
-            if tool_use.name == tools.LIST_DEVICES_TOOL_NAME:
-                result_data = tools.list_devices(catalog, tool_use.input.get("category"))
-            elif tool_use.name == tools.LIST_PLANS_TOOL_NAME:
-                result_data = tools.list_plans()
-            elif tool_use.name == tools.LIST_ALL_PLANS_TOOL_NAME:
-                result_data = tools.list_all_plans(plan_cat, tool_use.input.get("tier"))
-            elif tool_use.name == tools.DESCRIBE_PLAN_TOOL_NAME:
-                result_data = tools.describe_plan(plan_cat, tool_use.input.get("name", ""))
-            elif tool_use.name == tools.LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME:
-                result_data = tools.list_scan_building_blocks(plan_catalog.building_blocks(profile))
-            elif tool_use.name == tools.READ_PLAN_FILE_TOOL_NAME:
-                result_data = tools.read_plan_file(tool_use.input.get("path", ""))
-            elif tool_use.name == tools.VALIDATE_DOCSTRING_TOOL_NAME:
-                result_data = tools.validate_docstring(tool_use.input.get("drafts", []))
-            elif tool_use.name == tools.SEARCH_RUNS_TOOL_NAME:
-                result_data = tools.search_runs(profile, **tool_use.input)
-            elif tool_use.name == tools.DESCRIBE_RUN_TOOL_NAME:
-                result_data = tools.describe_run(profile, tool_use.input.get("run_id", ""))
-            else:
-                result_data = tools.read_run_data(
-                    profile,
-                    tool_use.input.get("run_id", ""),
-                    stream=tool_use.input.get("stream") or "primary",
-                    columns=tool_use.input.get("columns"),
+        for _ in range(max_turns):
+            try:
+                resp = client.call(system, messages, all_tools, temperature=temperature)
+            except Exception as exc:  # noqa: BLE001 -- surface any Argo/network failure to the caller
+                return (
+                    PlanResult(ok=False, message=f"Argo call failed: {exc}", model=client.model, tool_calls=tool_calls or None),
+                    messages,
                 )
+
+            resp_usage = getattr(resp, "usage", None)
+            if resp_usage is not None:
+                usage["input"] += getattr(resp_usage, "input_tokens", 0) or 0
+                usage["output"] += getattr(resp_usage, "output_tokens", 0) or 0
+                usage["cache_read"] += getattr(resp_usage, "cache_read_input_tokens", 0) or 0
+
+            messages.append({"role": "assistant", "content": resp.content})
+
+            tool_use = next((block for block in resp.content if block.type == "tool_use"), None)
+            if tool_use is None:
+                final_text = "".join(block.text for block in resp.content if block.type == "text").strip()
+                break
+
+            tool_calls.append(tool_use.name)
+
+            if tool_use.name in _LOOKUP_TOOL_NAMES:
+                if tool_use.name == tools.LIST_DEVICES_TOOL_NAME:
+                    result_data = tools.list_devices(catalog, tool_use.input.get("category"))
+                elif tool_use.name == tools.LIST_PLANS_TOOL_NAME:
+                    result_data = tools.list_plans()
+                elif tool_use.name == tools.LIST_ALL_PLANS_TOOL_NAME:
+                    result_data = tools.list_all_plans(plan_cat, tool_use.input.get("tier"))
+                elif tool_use.name == tools.DESCRIBE_PLAN_TOOL_NAME:
+                    result_data = tools.describe_plan(plan_cat, tool_use.input.get("name", ""))
+                elif tool_use.name == tools.LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME:
+                    result_data = tools.list_scan_building_blocks(plan_catalog.building_blocks(profile))
+                elif tool_use.name == tools.READ_PLAN_FILE_TOOL_NAME:
+                    result_data = tools.read_plan_file(tool_use.input.get("path", ""))
+                elif tool_use.name == tools.VALIDATE_DOCSTRING_TOOL_NAME:
+                    result_data = tools.validate_docstring(tool_use.input.get("drafts", []))
+                elif tool_use.name == tools.SEARCH_RUNS_TOOL_NAME:
+                    result_data = tools.search_runs(profile, **tool_use.input)
+                elif tool_use.name == tools.DESCRIBE_RUN_TOOL_NAME:
+                    result_data = tools.describe_run(profile, tool_use.input.get("run_id", ""))
+                else:
+                    result_data = tools.read_run_data(
+                        profile,
+                        tool_use.input.get("run_id", ""),
+                        stream=tool_use.input.get("stream") or "primary",
+                        columns=tool_use.input.get("columns"),
+                    )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": tool_use.id, "content": json.dumps(result_data)}],
+                    }
+                )
+                continue
+
+            # Terminal tool (a propose_* schema, ask_user, or cannot_generate_plan):
+            # close out this tool_use with a placeholder result so `messages` stays
+            # API-valid if the caller resumes this conversation later, then stop.
             messages.append(
                 {
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": tool_use.id, "content": json.dumps(result_data)}],
+                    "content": [{"type": "tool_result", "tool_use_id": tool_use.id, "content": "Acknowledged."}],
                 }
             )
-            continue
+            terminal = (tool_use.name, tool_use.input)
+            break
+        else:
+            return (
+                PlanResult(
+                    ok=False,
+                    message="I wasn't able to reach a decision after several lookups -- could you simplify or rephrase the request?",
+                    model=client.model,
+                    tool_calls=tool_calls or None,
+                ),
+                messages,
+            )
 
-        # Terminal tool (a propose_* schema, ask_user, or cannot_generate_plan):
-        # close out this tool_use with a placeholder result so `messages` stays
-        # API-valid if the caller resumes this conversation later, then stop.
-        messages.append(
-            {
-                "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": tool_use.id, "content": "Acknowledged."}],
-            }
-        )
-        terminal = (tool_use.name, tool_use.input)
-        break
-    else:
-        return (
-            PlanResult(
-                ok=False,
-                message="I wasn't able to reach a decision after several lookups -- could you simplify or rephrase the request?",
-                model=client.model,
-                tool_calls=tool_calls or None,
-            ),
-            messages,
-        )
+        if terminal is None:
+            fallback = "The model didn't return a usable reply for that turn -- try rephrasing or asking a narrower question."
+            return (
+                PlanResult(ok=False, message=final_text or fallback, model=client.model, tool_calls=tool_calls or None),
+                messages,
+            )
 
-    if terminal is None:
-        fallback = "The model didn't return a usable reply for that turn -- try rephrasing or asking a narrower question."
-        return (
-            PlanResult(ok=False, message=final_text or fallback, model=client.model, tool_calls=tool_calls or None),
-            messages,
-        )
+        called_tool, raw_spec = terminal
 
-    called_tool, raw_spec = terminal
+        if called_tool == plan_spec.DECLINE_TOOL_NAME:
+            reason = raw_spec.get("reason") or "The request didn't look like a scan/count description."
+            return (
+                PlanResult(ok=False, message=reason, raw_spec=raw_spec, model=client.model, tool_name=called_tool, tool_calls=tool_calls),
+                messages,
+            )
 
-    if called_tool == plan_spec.DECLINE_TOOL_NAME:
-        reason = raw_spec.get("reason") or "The request didn't look like a scan/count description."
-        return (
-            PlanResult(ok=False, message=reason, raw_spec=raw_spec, model=client.model, tool_name=called_tool, tool_calls=tool_calls),
-            messages,
-        )
+        if called_tool == plan_spec.ASK_USER_TOOL_NAME:
+            question = raw_spec.get("question") or "Could you clarify your request?"
+            return (
+                PlanResult(ok=False, message=question, raw_spec=raw_spec, model=client.model, tool_name=called_tool, tool_calls=tool_calls),
+                messages,
+            )
 
-    if called_tool == plan_spec.ASK_USER_TOOL_NAME:
-        question = raw_spec.get("question") or "Could you clarify your request?"
-        return (
-            PlanResult(ok=False, message=question, raw_spec=raw_spec, model=client.model, tool_name=called_tool, tool_calls=tool_calls),
-            messages,
-        )
+        template = tool_name_to_template.get(called_tool)
+        if template is None:
+            return (
+                PlanResult(ok=False, message=f"Model called an unknown tool: {called_tool}", model=client.model, tool_calls=tool_calls),
+                messages,
+            )
 
-    template = tool_name_to_template.get(called_tool)
-    if template is None:
-        return (
-            PlanResult(ok=False, message=f"Model called an unknown tool: {called_tool}", model=client.model, tool_calls=tool_calls),
-            messages,
-        )
+        try:
+            clean = plan_spec.validate(template, raw_spec, catalog, blocks)
+        except plan_spec.ValidationError as exc:
+            return (
+                PlanResult(
+                    ok=False,
+                    message="Validation failed: " + "; ".join(exc.errors),
+                    template_key=template.key,
+                    raw_spec=raw_spec,
+                    errors=exc.errors,
+                    model=client.model,
+                    tool_name=called_tool,
+                    tool_calls=tool_calls,
+                ),
+                messages,
+            )
 
-    try:
-        clean = plan_spec.validate(template, raw_spec, catalog, blocks)
-    except plan_spec.ValidationError as exc:
-        return (
-            PlanResult(
-                ok=False,
-                message="Validation failed: " + "; ".join(exc.errors),
-                template_key=template.key,
-                raw_spec=raw_spec,
-                errors=exc.errors,
-                model=client.model,
-                tool_name=called_tool,
-                tool_calls=tool_calls,
-            ),
-            messages,
-        )
+        notes = _flag_device_substitutions(template, clean, request)
 
-    notes = _flag_device_substitutions(template, clean, request)
+        if template.gui_plan_name:
+            # Drivable directly: fill B-PILOT's own form for the real plan
+            # instead of writing a new file (see plan_renderer.render_command()).
+            command = plan_renderer.render_command(template, clean)
+            message = f'Ready -- click "Open in form" to load {template.gui_plan_name} with these values.'
+            if notes:
+                message += "\n" + "\n".join(notes)
+            return (
+                PlanResult(
+                    ok=True,
+                    message=message,
+                    template_key=template.key,
+                    raw_spec=raw_spec,
+                    clean_spec=clean,
+                    gui_command=command,
+                    model=client.model,
+                    tool_name=called_tool,
+                    tool_calls=tool_calls,
+                ),
+                messages,
+            )
 
-    if template.gui_plan_name:
-        # Drivable directly: fill B-PILOT's own form for the real plan
-        # instead of writing a new file (see plan_renderer.render_command()).
-        command = plan_renderer.render_command(template, clean)
-        message = f'Ready -- click "Open in form" to load {template.gui_plan_name} with these values.'
+        GENERATED_DIR.mkdir(exist_ok=True)
+        filename, text = plan_renderer.render(template, clean, catalog, summary=request)
+        out_path = GENERATED_DIR / filename
+        out_path.write_text(text)
+
+        message = f"Wrote draft plan: {out_path}"
         if notes:
             message += "\n" + "\n".join(notes)
+
         return (
             PlanResult(
                 ok=True,
@@ -347,7 +393,7 @@ def converse(
                 template_key=template.key,
                 raw_spec=raw_spec,
                 clean_spec=clean,
-                gui_command=command,
+                filepath=str(out_path),
                 model=client.model,
                 tool_name=called_tool,
                 tool_calls=tool_calls,
@@ -355,29 +401,11 @@ def converse(
             messages,
         )
 
-    GENERATED_DIR.mkdir(exist_ok=True)
-    filename, text = plan_renderer.render(template, clean, catalog, summary=request)
-    out_path = GENERATED_DIR / filename
-    out_path.write_text(text)
-
-    message = f"Wrote draft plan: {out_path}"
-    if notes:
-        message += "\n" + "\n".join(notes)
-
-    return (
-        PlanResult(
-            ok=True,
-            message=message,
-            template_key=template.key,
-            raw_spec=raw_spec,
-            clean_spec=clean,
-            filepath=str(out_path),
-            model=client.model,
-            tool_name=called_tool,
-            tool_calls=tool_calls,
-        ),
-        messages,
-    )
+    result, messages = _run_turns()
+    result.input_tokens = usage["input"]
+    result.output_tokens = usage["output"]
+    result.cache_read_input_tokens = usage["cache_read"] or None
+    return result, messages
 
 
 def generate_plan(

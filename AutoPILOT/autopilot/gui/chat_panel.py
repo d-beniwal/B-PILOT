@@ -217,6 +217,10 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         # on a new send/New Chat so "Open in form" can never act on a stale
         # proposal from an earlier turn.
         self._pending: pipeline.PlanResult | None = None
+        # "Thinking" placeholder state -- see _start_thinking()/_stop_thinking().
+        self._thinking_timer: QtCore.QTimer | None = None
+        self._thinking_pos: int | None = None
+        self._thinking_dots = 0
 
         self._settings = settings.load()
         self._worker = _ChatWorker(self._settings)
@@ -232,6 +236,12 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         # `QLabel` rule, which would leave this one label stuck on
         # B-PILOT's muted grey regardless of theme.
         header_row.addWidget(self._model_caption, 1)
+        # Hidden unless a local testing catalog override is set (see
+        # settings_dialog.py's "Testing (local only)" card) -- must stay
+        # visible whenever active so a tester can't forget it's on.
+        self._catalog_override_caption = QtWidgets.QLabel()
+        self._catalog_override_caption.setVisible(False)
+        header_row.addWidget(self._catalog_override_caption)
         self._open_form_btn = QtWidgets.QPushButton("Open in form")
         self._open_form_btn.setToolTip(
             "Load the most recent proposed plan into B-PILOT's plan-runner form for review."
@@ -262,15 +272,22 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         self._input = _ComposerBox()
         self._input.send_requested.connect(self._on_send)
         row.addWidget(self._input, 1)
-        send_btn = QtWidgets.QPushButton("Send")
-        send_btn.clicked.connect(self._on_send)
-        row.addWidget(send_btn, 0, QtCore.Qt.AlignBottom)
+        self._send_btn = QtWidgets.QPushButton("Send")
+        self._send_btn.clicked.connect(self._on_send)
+        row.addWidget(self._send_btn, 0, QtCore.Qt.AlignBottom)
         layout.addLayout(row)
 
         self.setWidget(body)
         self._apply_settings()
 
     def _new_chat(self) -> None:
+        # Stop (don't "remove-then-clear") -- _transcript.clear() below already
+        # wipes the placeholder; a stale self._thinking_pos would otherwise
+        # point past the now-empty document on the next tick.
+        if self._thinking_timer is not None:
+            self._thinking_timer.stop()
+            self._thinking_timer = None
+        self._thinking_pos = None
         self._worker.reset_conversation()
         self._transcript.clear()
         self._pending = None
@@ -291,6 +308,12 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         )
         self._model_caption.setText(f"Model: {self._worker.client.model}")
         self._model_caption.setStyleSheet(f"color: {self._theme.muted}; font-size: 10px;")
+        override = s.get("databroker_catalog_override", "")
+        self._catalog_override_caption.setText(f"catalog override: {override}")
+        self._catalog_override_caption.setStyleSheet(
+            f"color: {self._theme.accent}; font-size: 10px; font-weight: bold;"
+        )
+        self._catalog_override_caption.setVisible(bool(override))
         # Dock-scoped stylesheet: overrides B-PILOT's app-wide (light) QSS for
         # just this dock and its children -- see `themes.build_dock_stylesheet`.
         self.setStyleSheet(themes.build_dock_stylesheet(self._theme, s["font_size"]))
@@ -344,6 +367,11 @@ class ChatDockWidget(QtWidgets.QDockWidget):
             meta_bits.append(f"tools: {trail}")
         elif result.tool_name:
             meta_bits.append(f"tool: {escape(result.tool_name)}")
+        if result.input_tokens is not None:
+            tokens_bit = f"tokens: {result.input_tokens} in / {result.output_tokens} out"
+            if result.cache_read_input_tokens:
+                tokens_bit += f" (cached: {result.cache_read_input_tokens})"
+            meta_bits.append(tokens_bit)
         header = " &middot; ".join(meta_bits)
         body_html = escape(result.message).replace("\n", "<br>")
         if s["show_raw_output"]:
@@ -386,6 +414,53 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         scrollbar = self._transcript.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _start_thinking(self) -> None:
+        """Append an animated placeholder bubble while a request is in flight.
+
+        `self._thinking_pos` marks the document offset right before the
+        placeholder is appended -- `QTextEdit.append()` always appends at the
+        true document end regardless of `textCursor()`, so re-rendering (or
+        finally removing) the placeholder is just "delete from that saved
+        offset to the current end, then append again."
+        """
+        self._thinking_dots = 0
+        cursor = self._transcript.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        self._thinking_pos = cursor.position()
+        self._render_thinking()
+        self._thinking_timer = QtCore.QTimer(self)
+        self._thinking_timer.timeout.connect(self._tick_thinking)
+        self._thinking_timer.start(450)
+
+    def _tick_thinking(self) -> None:
+        self._thinking_dots = (self._thinking_dots + 1) % 3
+        self._render_thinking()
+
+    def _render_thinking(self) -> None:
+        self._clear_thinking_text()
+        dots = "." * (1 + self._thinking_dots)
+        html = (
+            f'<div style="color:{self._theme.muted}; '
+            f'font-size:{self._settings["font_size"] - 1}px;">AutoPILOT is thinking{dots}</div>'
+        )
+        self._transcript.append(html)
+        self._scroll_to_bottom()
+
+    def _clear_thinking_text(self) -> None:
+        if self._thinking_pos is None:
+            return
+        cursor = self._transcript.textCursor()
+        cursor.setPosition(self._thinking_pos)
+        cursor.movePosition(QtGui.QTextCursor.End, QtGui.QTextCursor.KeepAnchor)
+        cursor.removeSelectedText()
+
+    def _stop_thinking(self) -> None:
+        if self._thinking_timer is not None:
+            self._thinking_timer.stop()
+            self._thinking_timer = None
+        self._clear_thinking_text()
+        self._thinking_pos = None
+
     def _on_send(self) -> None:
         text = self._input.toPlainText().strip()
         if not text:
@@ -393,13 +468,17 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         self._append_user(text)
         self._input.clear()
         self._input.setEnabled(False)
+        self._send_btn.setEnabled(False)
         # A new turn in flight supersedes whatever the last turn proposed.
         self._pending = None
         self._open_form_btn.setEnabled(False)
+        self._start_thinking()
         self._worker.submit(text)
 
     def _on_result(self, result: "pipeline.PlanResult") -> None:
+        self._stop_thinking()
         self._input.setEnabled(True)
+        self._send_btn.setEnabled(True)
         self._append_response(result)
         self._input.setFocus()
         self._pending = result if (result.ok and result.gui_command) else None
