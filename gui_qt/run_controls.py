@@ -72,10 +72,7 @@ class RunControlBar(QtWidgets.QWidget):
         self._stop_btn.pressed.connect(self._on_pressed)
         self._stop_btn.released.connect(self._on_released)
         row.addWidget(self._stop_btn)
-
-        self._hint = QtWidgets.QLabel("")
-        self._hint.setStyleSheet(f"color: {S.MUTED};")
-        row.addWidget(self._hint, 1)
+        row.addStretch(1)
 
         self._shutdown_btn = QtWidgets.QPushButton("Shut down kernel")
         self._shutdown_btn.setToolTip(
@@ -84,6 +81,12 @@ class RunControlBar(QtWidgets.QWidget):
         self._shutdown_btn.clicked.connect(self._shutdown)
         row.addWidget(self._shutdown_btn)
         outer.addLayout(row)
+
+        # Own row below the buttons so a long status message never widens the
+        # button row (which would otherwise shove the IPython console splitter).
+        self._hint = QtWidgets.QLabel("")
+        self._hint.setStyleSheet(f"color: {S.MUTED};")
+        outer.addWidget(self._hint)
 
         # Temporary recovery actions (hidden until a pause is requested).
         self._recovery = QtWidgets.QFrame()
