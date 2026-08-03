@@ -24,15 +24,13 @@ from PyQt5 import QtCore
 from PyQt5 import QtGui
 from PyQt5 import QtWidgets
 
+from . import command_builder
 from . import config
-from . import device_source
+from . import param_form
 from . import plan_parser as P
 from . import style as S
 from .panel_ribbon import CollapsibleSplitterPanel
-from .plan_parser import _NODEFAULT
 from .plan_parser import ParamSpec
-from .plan_parser import RawCode
-from .skeleton_widgets import MotorAxisListWidget
 from .skeleton_widgets import MotorAxisPicker
 from .skeleton_widgets import MotorRowsWidget
 
@@ -562,129 +560,19 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._skeleton = None
         self._motor_rows_widget = None
 
-    @staticmethod
-    def _label_text(spec: ParamSpec) -> str:
-        label = spec.short or spec.name
-        if spec.units:
-            label += f"  ({spec.units})"
-        if spec.required:
-            label += "  ★"
-        return label
-
-    @staticmethod
-    def _tooltip(spec: ParamSpec) -> str:
-        """Rich hover hint: name, dtype/units, required-ness, description."""
-        head = f"{spec.name} : {spec.dtype}"
-        if spec.units:
-            head += f" [{spec.units}]"
-        lines = [head, "required" if spec.required else "optional"]
-        detail = spec.long or (spec.short if spec.short != spec.name else "")
-        if detail:
-            lines += ["", detail]
-        return "\n".join(lines)
-
     def _rebuild_param_form(self, params: list[ParamSpec], row_offset: int = 0) -> None:
         """Build the ordinary per-`ParamSpec` grid, starting at grid row `row_offset`.
 
         `row_offset` lets `_rebuild_skeleton_form` place the motor-rows widget
         in the row above this one without a second grid; every other call site
-        keeps the default (row 0) unchanged.
+        keeps the default (row 0) unchanged. Widget building/dtype logic lives
+        in :mod:`param_form`, shared with the switch-to/cont-acq popups.
         """
         if row_offset == 0:
             self._clear_param_grid()
-        for row, spec in enumerate(params, start=row_offset):
-            tip = self._tooltip(spec)
-            lbl = S.LabelRight(self._label_text(spec))
-            lbl.setWordWrap(True)
-            S.HoverTip(lbl, tip)
-            self._param_grid.addWidget(lbl, row, 0)
-
-            if spec.dtype == "positions":
-                widget = QtWidgets.QPlainTextEdit()
-                widget.setObjectName("mono")
-                widget.setFixedHeight(S.px(90))
-                widget.setPlaceholderText("100, 0, 50\n150, 0, 50")
-                widget.textChanged.connect(self._live_validate)
-            elif spec.dtype == "bool":
-                widget = QtWidgets.QCheckBox()
-                widget.setChecked(bool(spec.default))
-                widget.toggled.connect(self._live_validate)
-            elif spec.dtype == "choice":
-                widget = S.NoScrollComboBox()
-                opts = spec.choices or (
-                    [str(spec.default)] if spec.default is not None else []
-                )
-                widget.addItems(opts)
-                if spec.default is not None and str(spec.default) in opts:
-                    widget.setCurrentText(str(spec.default))
-                widget.currentTextChanged.connect(self._live_validate)
-            elif spec.dtype == "device" and spec.category == "motor":
-                # A motor is a multi-axis device -> pick motor + axis; the
-                # generated token is `motor.axis` (see MotorAxisPicker).
-                widget = MotorAxisPicker(
-                    allow_blank=spec.blank_omits or not spec.required
-                )
-                if spec.default not in (None, _NODEFAULT):
-                    widget.set_from(str(spec.default), None)
-                widget.changed.connect(self._live_validate)
-            elif spec.dtype == "device":
-                # One device object -> dropdown of names for this category.
-                widget = S.NoScrollComboBox()
-                names = device_source.get_catalog().names_for(spec.category)
-                # An optional device (None default / not required) gets a blank
-                # entry meaning "omit the arg -> plan uses its default device".
-                if spec.blank_omits or not spec.required:
-                    widget.addItem("")
-                widget.addItems(names)
-                if spec.default not in (None, _NODEFAULT) and str(spec.default) in names:
-                    widget.setCurrentText(str(spec.default))
-                widget.currentTextChanged.connect(self._live_validate)
-            elif spec.dtype == "device_list" and spec.category == "motor":
-                # List of motor axes -> a repeatable motor+axis picker per item
-                # (a flat multi-select can't attach a per-item axis choice).
-                widget = MotorAxisListWidget()
-                widget.changed.connect(self._live_validate)
-            elif spec.dtype == "device_list":
-                # List of device objects -> multi-select of names for the category.
-                widget = QtWidgets.QListWidget()
-                widget.setSelectionMode(
-                    QtWidgets.QAbstractItemView.ExtendedSelection
-                )
-                widget.addItems(device_source.get_catalog().names_for(spec.category))
-                widget.setFixedHeight(S.px(90))
-                widget.itemSelectionChanged.connect(self._live_validate)
-            elif spec.dtype == "block":
-                # scan_skeletons.py building-block function reference (plan_opener/
-                # per_step/plan_closer) -> dropdown of names from the active
-                # profile's discovered `plan_building_blocks` catalog. Unlike
-                # `device`, never offer a blank entry: a missing per_step breaks
-                # the plan at run time (no sensible "omit" fallback), so this dtype
-                # always requires a real selection (see `_field_error`).
-                widget = S.NoScrollComboBox()
-                names = (config.get("plan_building_blocks") or {}).get(spec.category) or []
-                widget.addItems(names)
-                if spec.default not in (None, _NODEFAULT) and str(spec.default) in names:
-                    widget.setCurrentText(str(spec.default))
-                widget.currentTextChanged.connect(self._live_validate)
-            else:  # str / int / float / unknown -> line edit
-                widget = QtWidgets.QLineEdit()
-                # Datatype enforcement: numeric fields reject non-numeric input.
-                if spec.dtype == "int":
-                    widget.setValidator(QtGui.QIntValidator())
-                elif spec.dtype == "float":
-                    v = QtGui.QDoubleValidator()
-                    v.setNotation(QtGui.QDoubleValidator.StandardNotation)
-                    v.setLocale(QtCore.QLocale.c())
-                    widget.setValidator(v)
-                if spec.default not in (None, _NODEFAULT):
-                    widget.setText(str(spec.default))
-                widget.textChanged.connect(self._live_validate)
-
-            S.HoverTip(widget, tip)
-            self._param_grid.addWidget(widget, row, 1)
-            self._param_widgets[spec.name] = (spec, widget)
-
-        self._param_grid.setRowStretch(len(params) + row_offset, 1)
+        self._param_widgets.update(
+            param_form.build_grid(self._param_grid, params, self._live_validate, row_offset)
+        )
 
     def _rebuild_skeleton_form(self, skeleton: tuple[str, bool], params: list[ParamSpec]) -> None:
         """Composite form for a scan_skeletons.py plan: motor rows (row 0), then
@@ -731,73 +619,12 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     # ── Validation ────────────────────────────────────────────────────────────────
 
     def _field_error(self, spec: ParamSpec, widget) -> str | None:
-        """Return an error string for `widget`, or None when it is acceptable."""
-        short = spec.short or spec.name
-        if spec.dtype == "positions":
-            raw = widget.toPlainText().strip()
-            if not raw:
-                return f"{short}: required" if spec.required else None
-            for i, line in enumerate(raw.splitlines(), 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    parts = [float(x.strip()) for x in line.split(",")]
-                except ValueError:
-                    return f"{short} line {i}: non-numeric value"
-                if len(parts) != 3:
-                    return f"{short} line {i}: expected 3 values, got {len(parts)}"
-            return None
-        if spec.dtype == "bool":
-            return None
-        if spec.dtype == "choice":
-            if not widget.currentText().strip() and spec.required:
-                return f"{short}: required"
-            return None
-        if spec.dtype == "device" and spec.category == "motor":
-            if not widget.motor():
-                return f"{short}: required" if spec.required else None
-            return widget.error()  # motor chosen -> may still need an axis
-        if spec.dtype == "device":
-            if not widget.currentText().strip() and spec.required:
-                return f"{short}: required"
-            return None
-        if spec.dtype == "device_list" and spec.category == "motor":
-            errs = widget.errors()
-            if errs:
-                return "; ".join(errs)
-            if not widget.tokens() and spec.required:
-                return f"{short}: required"
-            return None
-        if spec.dtype == "device_list":
-            if not widget.selectedItems() and spec.required:
-                return f"{short}: required"
-            return None
-        if spec.dtype == "block":
-            # Always required, regardless of the signature's default (see
-            # `_rebuild_param_form`'s "block" branch) — a blank plan_opener/
-            # per_step/plan_closer has no working fallback.
-            if not widget.currentText().strip():
-                return f"{short}: required"
-            return None
+        """Return an error string for `widget`, or None when it is acceptable.
 
-        # str / int / float / unknown -> line edit
-        raw = widget.text().strip()
-        if not raw:
-            if spec.required and not spec.blank_omits:
-                return f"{short}: required"
-            return None
-        if spec.dtype == "float":
-            try:
-                float(raw)
-            except ValueError:
-                return f"{short}: not a valid number"
-        elif spec.dtype == "int":
-            try:
-                int(raw)
-            except ValueError:
-                return f"{short}: not a valid integer"
-        return None
+        Dtype-specific logic lives in :func:`param_form.field_error`, shared
+        with the switch-to/cont-acq popups.
+        """
+        return param_form.field_error(spec, widget)
 
     def _skeleton_errors(self) -> list[str]:
         """Errors for the dedicated motor-rows widget.
@@ -861,6 +688,11 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     # ── Parameter parsing ─────────────────────────────────────────────────────────
 
     def _parse_params(self) -> tuple[dict | None, list[str]]:
+        """Extract `{name: value}` from the current form, plus validation
+        errors. Per-dtype extraction lives in :func:`param_form.parse_values`,
+        shared with the switch-to/cont-acq popups; the skeleton (`*args`) and generic
+        (`__args__`) shapes are plan-runner-specific and handled here.
+        """
         plan_name = self._plan_cb.currentText()
         if not plan_name:
             return None, ["No plan selected."]
@@ -877,118 +709,16 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             if not skeleton_errors:
                 # Already-rendered source fragments (bare motor names, numeric
                 # literals, "[..]" list literals) — spliced verbatim as leading
-                # positional args in _make_re_line, no repr()/RawCode needed here.
+                # positional args in command_builder.make_re_line, no repr()/
+                # RawCode needed here.
                 values["__positional__"] = self._motor_rows_widget.tokens()
 
-        for spec in self._current_params:
-            widget = self._param_widgets[spec.name][1]
-            short = spec.short or spec.name
-
-            if spec.dtype == "positions":
-                raw = widget.toPlainText().strip()
-                if not raw:
-                    if spec.required:
-                        errors.append(f"{short}: required")
-                    continue
-                triples = []
-                for i, line in enumerate(raw.splitlines(), 1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        parts = [float(x.strip()) for x in line.split(",")]
-                        if len(parts) != 3:
-                            raise ValueError(f"expected 3 values, got {len(parts)}")
-                        triples.append(tuple(parts))
-                    except ValueError as exc:
-                        errors.append(f"{short} line {i}: {exc}")
-                if triples:
-                    values[spec.name] = triples
-            elif spec.dtype == "bool":
-                values[spec.name] = widget.isChecked()
-            elif spec.dtype == "choice":
-                val = widget.currentText().strip()
-                if val:
-                    values[spec.name] = val
-                elif spec.default not in (None, _NODEFAULT):
-                    values[spec.name] = spec.default
-            elif spec.dtype == "device" and spec.category == "motor":
-                # Motor -> `motor.axis` (RawCode, emitted unquoted).
-                if not widget.motor():
-                    if spec.required:
-                        errors.append(f"{short}: required")
-                    # else: blank -> omit the arg (plan uses its default)
-                else:
-                    err = widget.error()  # e.g. axis still needed
-                    if err:
-                        errors.append(f"{short}: {err}")
-                    else:
-                        values[spec.name] = RawCode(widget.token())
-            elif spec.dtype == "device":
-                # RawCode -> emitted unquoted (a real object, not a string).
-                val = widget.currentText().strip()
-                if val:
-                    values[spec.name] = RawCode(val)
-                elif spec.required:
-                    errors.append(f"{short}: required")
-                # else: blank -> omit the arg (plan uses its default device)
-            elif spec.dtype == "device_list" and spec.category == "motor":
-                # List of `motor.axis` refs (RawCode, emitted unquoted).
-                row_errors = widget.errors()
-                for err in row_errors:
-                    errors.append(f"{short}: {err}")
-                tokens = widget.tokens()
-                if tokens and not row_errors:
-                    values[spec.name] = RawCode("[" + ", ".join(tokens) + "]")
-                elif not tokens and spec.required:
-                    errors.append(f"{short}: required")
-                # else: empty -> omit the arg (plan uses its default, e.g. [])
-            elif spec.dtype == "device_list":
-                names = [it.text() for it in widget.selectedItems()]
-                if names:
-                    values[spec.name] = RawCode("[" + ", ".join(names) + "]")
-                elif spec.required:
-                    errors.append(f"{short}: required")
-                # else: empty -> omit the arg (plan uses its default, e.g. [])
-            elif spec.dtype == "block":
-                # RawCode -> emitted unquoted (a real function reference).
-                # Always required (see `_field_error`) — never omitted.
-                val = widget.currentText().strip()
-                if val:
-                    values[spec.name] = RawCode(val)
-                else:
-                    errors.append(f"{short}: required")
-            elif spec.dtype == "float":
-                self._read_number(spec, widget, values, errors, short, float, "number")
-            elif spec.dtype == "int":
-                self._read_number(spec, widget, values, errors, short, int, "integer")
-            else:  # str / unknown -> text
-                raw = widget.text().strip()
-                if raw:
-                    values[spec.name] = raw
-                elif spec.blank_omits:
-                    pass
-                elif spec.required:
-                    errors.append(f"{short}: required")
-                elif spec.default not in (None, _NODEFAULT):
-                    values[spec.name] = spec.default
-
+        param_values, param_errors = param_form.parse_values(
+            self._current_params, self._param_widgets
+        )
+        values.update(param_values)
+        errors.extend(param_errors)
         return values, errors
-
-    @staticmethod
-    def _read_number(spec, widget, values, errors, short, caster, kind) -> None:
-        raw = widget.text().strip()
-        if raw:
-            try:
-                values[spec.name] = caster(raw)
-            except ValueError:
-                errors.append(f"{short}: not a valid {kind}")
-        elif spec.blank_omits:
-            pass
-        elif spec.required:
-            errors.append(f"{short}: required")
-        elif spec.default not in (None, _NODEFAULT):
-            values[spec.name] = spec.default
 
     # ── Command generation ───────────────────────────────────────────────────────
 
@@ -997,29 +727,10 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         # unknown: the MPE session loads `from instrument.collection import *`,
         # which re-exports every plan, so this import resolves for any real plan.
         module = self._plan_origins.get(plan_name, "instrument.collection")
-        return f"from {module} import {plan_name}"
+        return command_builder.make_import_line(plan_name, module)
 
     def _make_re_line(self, plan_name: str, values: dict, notes: str = "") -> str:
-        if "__args__" in values:
-            inner = f"{plan_name}({values['__args__']})"
-        else:
-            values = dict(values)
-            # Leading positional args (scan_skeletons.py's *args, from
-            # MotorRowsWidget.tokens()) must come first — Python syntax requires
-            # positional args before keyword args.
-            args = list(values.pop("__positional__", []))
-            for spec in self._current_params:
-                if spec.name not in values:
-                    continue
-                val = values[spec.name]
-                # RawCode (device/block refs) emit verbatim; everything else via repr().
-                rendered = str(val) if isinstance(val, RawCode) else repr(val)
-                args.append(f"{spec.name}={rendered}")
-            inner = f"{plan_name}({', '.join(args)})"
-        if notes:
-            # Lands in the run's start document (cat[uid].metadata["start"]["notes"]).
-            return f"RE({inner}, md={{'notes': {notes!r}}})"
-        return f"RE({inner})"
+        return command_builder.make_re_line(plan_name, self._current_params, values, notes)
 
     def _compose_lines(self) -> tuple[str, str] | tuple[None, None]:
         """Return (import_line, re_line) if the form is valid, else (None, None)."""

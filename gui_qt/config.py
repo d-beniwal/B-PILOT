@@ -118,6 +118,10 @@ DEFAULTS: dict = {
     # static-analysis, never-import guarantee as device_search_paths.
     "plan_building_search_paths": [],
     "suspender_search_paths": [],
+    # Files scanned by switchto_popup.discover_shortcuts() for that beamline's
+    # switch_to_* shortcut plans (instrument/plans/<bl>_plans/<bl>_shortcuts.py).
+    # Same static-analysis, never-import guarantee as device_search_paths.
+    "switch_to_search_paths": [],
     # {category: [name, ...]} for plan_opener/per_step/plan_closer/suspender/
     # pseudo_suspender, as of the last Discover click. Unlike device_selection
     # this is NOT rescanned live on every use — these building blocks change

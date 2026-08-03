@@ -61,6 +61,14 @@ class ConsolePanel(QtWidgets.QWidget):
     executed = QtCore.pyqtSignal(object)   # a cell finished (execute_reply msg)
     attach_failed = QtCore.pyqtSignal(str)  # attach() could not connect (reason)
     launch_blocked = QtCore.pyqtSignal(object)  # start() refused: kernel already running
+    # A command actually finished executing SUCCESSFULLY in the kernel --
+    # from ANY client (this GUI's own console, another attached GUI, or the
+    # detached queue runner), unlike `executing`/`executed` which only fire
+    # for this widget's own execute() calls. Emitted with the raw source
+    # text once the cell goes idle on iopub WITHOUT an intervening `error`
+    # message (sent to every attached client) -- a command that raises never
+    # fires this.
+    code_executed = QtCore.pyqtSignal(str)
 
     def __init__(self, parent=None, font_size: int = 11) -> None:
         """Build the placeholder view; the kernel starts later via :meth:`start`."""
@@ -80,6 +88,11 @@ class ConsolePanel(QtWidgets.QWidget):
         # query_values); dispatched from _on_shell_msg alongside the existing
         # kernel_info_reply handshake handling.
         self._pending_queries: dict[str, tuple[dict, object]] = {}
+        # msg_id -> source, for visible executions awaiting completion (see
+        # _on_iopub_msg / code_executed) -- and the subset of those msg_ids
+        # that raised, so a failed command is never reported as having run.
+        self._pending_execs: dict[str, str] = {}
+        self._errored_execs: set[str] = set()
 
         self._stack = QtWidgets.QStackedWidget()
         self._placeholder = QtWidgets.QLabel(_PLACEHOLDER)
@@ -213,6 +226,7 @@ class ConsolePanel(QtWidgets.QWidget):
         self._connection_file = cf
         self._remember_connection_file(cf)
 
+        kc.iopub_channel.message_received.connect(self._on_iopub_msg)
         self._begin_handshake()
         self._wire_widget(km, kc)
         self._down = False
@@ -408,6 +422,39 @@ class ConsolePanel(QtWidgets.QWidget):
         if mtype == "kernel_info_reply":
             self._ready = True
             self.ready.emit()
+
+    def _on_iopub_msg(self, msg) -> None:
+        """Detect a command that ran to a SUCCESSFUL completion (any client).
+
+        The kernel broadcasts `execute_input`, `error`, and `status` on iopub
+        to every attached client for every execution it runs, regardless of
+        which client requested it -- including the detached queue runner's
+        own `BlockingKernelClient.execute()` calls, which never touch this
+        widget's own `executing`/`executed` signals. A cell's messages always
+        arrive in order (`execute_input`, ... , an `error` message if it
+        raised, then `status: idle` last), so `code_executed` only fires on
+        `idle` and only if no `error` was seen for that same execution.
+        """
+        mtype = msg.get("msg_type") or msg.get("header", {}).get("msg_type")
+        parent_id = msg.get("parent_header", {}).get("msg_id")
+        if mtype == "execute_input":
+            code = msg.get("content", {}).get("code", "")
+            if code.strip() and parent_id:
+                self._pending_execs[parent_id] = code
+            return
+        if parent_id not in self._pending_execs:
+            return
+        if mtype == "error":
+            self._errored_execs.add(parent_id)
+        elif (
+            mtype == "status"
+            and msg.get("content", {}).get("execution_state") == "idle"
+        ):
+            code = self._pending_execs.pop(parent_id)
+            failed = parent_id in self._errored_execs
+            self._errored_execs.discard(parent_id)
+            if not failed:
+                self.code_executed.emit(code)
 
     def _dispatch_query_reply(self, msg_id: str, msg) -> None:
         """Resolve a pending `query_values` call from its execute_reply."""

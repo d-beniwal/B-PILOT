@@ -708,6 +708,28 @@ class HoverTip(QtCore.QObject):
             self._tip = None
 
 
+def clamp_popup_to_window(
+    anchor: QtWidgets.QWidget, popup: QtWidgets.QWidget
+) -> QtCore.QPoint:
+    """Global position for `popup`, anchored below `anchor`, that never spills
+    past the right (or left) edge of `anchor`'s top-level window.
+
+    ``Qt.Popup`` widgets are otherwise placed at a fixed offset from the
+    anchor regardless of their own width, so a wide popup opened near the
+    right edge of the main window extends outside it. Calls
+    ``popup.adjustSize()`` first so its sizeHint reflects the fully-built
+    layout.
+    """
+    popup.adjustSize()
+    window = anchor.window()
+    win_left = window.mapToGlobal(QtCore.QPoint(0, 0)).x()
+    win_right = win_left + window.width()
+    anchor_pos = anchor.mapToGlobal(QtCore.QPoint(0, anchor.height()))
+    x = min(anchor_pos.x(), win_right - popup.width())
+    x = max(x, win_left)
+    return QtCore.QPoint(x, anchor_pos.y())
+
+
 def mark_invalid(widget: QtWidgets.QWidget, invalid: bool) -> None:
     """Toggle the red ``invalid`` border on a field and repolish it."""
     if widget.property("invalid") == invalid:

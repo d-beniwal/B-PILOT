@@ -13,6 +13,7 @@ from . import device_source
 from . import paths
 from . import style as S
 from .console_panel import ConsolePanel
+from .contacq_popup import ContAcqButton
 from .mode_buttons import ModeButtonBar
 from .panel_ribbon import CollapsibleDockPanel
 from .panel_ribbon import PanelRibbon
@@ -20,6 +21,7 @@ from .plan_runner import PlanRunnerPanel
 from .queue_panel import QueuePanel
 from .run_controls import RunControlBar
 from .session_log import SessionLogView
+from .switchto_popup import SwitchToButton
 
 # Default work dir (kernel cwd): the project root, so a launched kernel's
 # ``from instrument.collection import *`` resolves regardless of where the GUI
@@ -50,13 +52,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.run_controls = RunControlBar(self.console, self._shutdown_kernel)
         self.mode_buttons = ModeButtonBar(self.console)
         self.queue = QueuePanel(self.console)
+        self._mode_btn = SwitchToButton(self.console)
+        self._contacq_btn = ContAcqButton(self.console)
         self.runner.runRequested.connect(self._on_run)
         self.runner.queueRequested.connect(self._on_queue)
+        self._mode_btn.runRequested.connect(self._on_run)
+        self._mode_btn.queueRequested.connect(self._on_queue)
         self.queue.copyToFormRequested.connect(self.runner.load_from_command)
         self.console.started.connect(self._on_console_started)
         self.console.ready.connect(self._on_console_ready)
         self.console.attach_failed.connect(self._on_attach_failed)
         self.console.launch_blocked.connect(self._on_launch_blocked)
+        self.console.code_executed.connect(self._mode_btn.note_code_ran)
 
         central = QtWidgets.QWidget()
         clay = QtWidgets.QVBoxLayout(central)
@@ -159,10 +166,7 @@ class MainWindow(QtWidgets.QMainWindow):
         S.configure_splitter(vsplit)
 
         console_card = S.make_card("IPython console")
-        self._exp_banner = QtWidgets.QLabel("")
-        self._exp_banner.setAlignment(QtCore.Qt.AlignCenter)
-        self._exp_banner.setVisible(False)
-        console_card.body.addWidget(self._exp_banner)
+        console_card.body.addWidget(self._build_status_bar())
         self._console_tabs = QtWidgets.QTabWidget()
         self._console_tabs.addTab(self.console, "Console")
         self._console_tabs.addTab(self.session_log, "Session log")
@@ -185,8 +189,29 @@ class MainWindow(QtWidgets.QMainWindow):
 
         vsplit.setStretchFactor(0, 1)
         vsplit.setStretchFactor(1, 0)
-        vsplit.setSizes([560, 260])
+        vsplit.setSizes([570, 260])
         return vsplit
+
+    def _build_status_bar(self) -> QtWidgets.QWidget:
+        """3-part strip above the console: Experiment / Mode / Cont. Aq.
+
+        The experiment banner gets half the strip's width; the two action
+        buttons split the other half between them (they use an Expanding
+        size policy — see SwitchToButton/ContAcqButton — so the stretch
+        factors below actually grow them instead of leaving dead space).
+        """
+        bar = QtWidgets.QWidget()
+        lay = QtWidgets.QHBoxLayout(bar)
+        lay.setContentsMargins(0, 0, 0, 6)
+        lay.setSpacing(6)
+
+        self._exp_label = QtWidgets.QLabel("")
+        self._exp_label.setAlignment(QtCore.Qt.AlignCenter)
+        self._exp_label.setVisible(False)
+        lay.addWidget(self._exp_label, 2)
+        lay.addWidget(self._mode_btn, 1)
+        lay.addWidget(self._contacq_btn, 1)
+        return bar
 
     def _on_run(self, command: str, notes: str) -> None:
         """Run the command in the console.
@@ -436,6 +461,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._act_restart.setEnabled(not attached)
         self._act_shutdown.setEnabled(True)
         self.runner.set_console_ready(True)
+        self._mode_btn.set_console_ready(True)
+        self._contacq_btn.set_console_ready(True)
         self.run_controls.set_console_ready(True)
         self.mode_buttons.set_console_ready(True)
         where = self._workdir.text().strip()
@@ -446,15 +473,13 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             # The GUI never prompted for an experiment this session — read the
             # truth from the kernel itself rather than trust stale GUI config.
-            self._set_experiment_banner("Experiment: checking…", confirmed=False)
+            self._set_experiment_banner("checking…", confirmed=False)
             self._start_experiment_probe()
         else:
             self._set_toolbar_status(f"IPython running in {where}")
             # Trusted immediately: this is exactly what LaunchDialog just wrote
             # to dm_experiment.txt before this kernel started.
-            self._set_experiment_banner(
-                f"Experiment: {self._last_launch_experiment}", confirmed=True
-            )
+            self._set_experiment_banner(self._last_launch_experiment, confirmed=True)
 
     def _start_experiment_probe(self) -> None:
         """Poll the attached kernel for DM_EXP until it resolves, then stop.
@@ -485,12 +510,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._exp_probe_inflight = False
         value = result.get("__dm_exp__")
         if value:
-            self._set_experiment_banner(f"Experiment: {value}", confirmed=True)
+            self._set_experiment_banner(value, confirmed=True)
             self._exp_probe_timer.stop()
         else:
             self._set_experiment_banner(
-                "Experiment: unknown — Bluesky not loaded in this kernel yet",
-                confirmed=False,
+                "unknown — Bluesky not loaded yet", confirmed=False
             )
 
     def _on_console_ready(self) -> None:
@@ -549,28 +573,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self._act_restart.setEnabled(False)
         self._act_shutdown.setEnabled(False)
         self.runner.set_console_ready(False)
+        self._mode_btn.set_console_ready(False)
+        self._contacq_btn.set_console_ready(False)
         self.run_controls.set_console_ready(False)
         self.mode_buttons.set_console_ready(False)
         self.session_log.stop()   # kernel gone — stop polling (keep text visible)
         self._clear_experiment_banner()
 
-    def _set_experiment_banner(self, text: str, *, confirmed: bool) -> None:
-        """Show `text` in a bold banner above the console tabs.
+    def _set_experiment_banner(self, value: str, *, confirmed: bool) -> None:
+        """Show "Experiment:\\n<value>" in a bold banner above the console tabs.
 
         `confirmed` picks accent (trusted value) vs warning (not yet known)
         styling — see :meth:`_on_console_started` / :meth:`_on_experiment_probed`.
         """
         color = S.ACCENT if confirmed else S.WARNING
-        self._exp_banner.setStyleSheet(
+        self._exp_label.setStyleSheet(
             f"font-weight: 700; font-size: {S.px(13)}px; padding: 4px; "
             f"border-radius: 3px; background: {color}; color: white;"
         )
-        self._exp_banner.setText(text)
-        self._exp_banner.setVisible(True)
+        self._exp_label.setText(f"Experiment:\n{value}")
+        self._exp_label.setVisible(True)
 
     def _clear_experiment_banner(self) -> None:
-        self._exp_banner.setVisible(False)
-        self._exp_banner.setText("")
+        self._exp_label.setVisible(False)
+        self._exp_label.setText("")
         if getattr(self, "_exp_probe_timer", None) is not None:
             self._exp_probe_timer.stop()
 

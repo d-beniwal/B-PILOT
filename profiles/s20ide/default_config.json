@@ -84,6 +84,9 @@
     "instrument/plans/suspenders_pseudo.py",
     "instrument/plans/s20ide_plans/s20ide_suspenders.py"
   ],
+  "switch_to_search_paths": [
+    "instrument/plans/s20ide_plans/s20ide_shortcuts.py"
+  ],
   "plan_building_blocks": {
     "plan_opener": [
       "hardware_opener",
