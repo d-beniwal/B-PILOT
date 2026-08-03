@@ -211,6 +211,7 @@ class ChatDockWidget(QtWidgets.QDockWidget):
     def __init__(self, plan_runner, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__("AutoPILOT", parent)
         self.setObjectName("AutoPILOTChatDock")
+        self.setTitleBarWidget(self._build_title_bar())
 
         self._plan_runner = plan_runner
         # The latest `ok` result that can be pushed into the form -- cleared
@@ -295,6 +296,52 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         self.setWidget(body)
         self._apply_settings()
 
+    def _build_title_bar(self) -> QtWidgets.QWidget:
+        """Replace the native title bar with a slim custom one: "AutoPILOT"
+        plus a small float/dock toggle icon next to the close (x) button.
+
+        A custom title bar is needed (rather than the default) because the
+        native float button's own redock behavior isn't reliable on every
+        window manager -- this one calls `setFloating()` directly instead.
+        """
+        bar = QtWidgets.QWidget()
+        bar.setObjectName("AutoPILOTTitleBar")
+        lay = QtWidgets.QHBoxLayout(bar)
+        lay.setContentsMargins(8, 3, 3, 3)
+        lay.setSpacing(0)
+
+        self._title_label = QtWidgets.QLabel("AutoPILOT")
+        self._title_label.setObjectName("AutoPILOTTitleLabel")
+        lay.addWidget(self._title_label)
+        lay.addStretch(1)
+
+        icon_size = QtCore.QSize(bpilot_style.px(12), bpilot_style.px(12))
+        btn_size = bpilot_style.px(18)
+
+        self._dock_toggle_btn = QtWidgets.QToolButton()
+        self._dock_toggle_btn.setAutoRaise(True)
+        self._dock_toggle_btn.setFixedSize(btn_size, btn_size)
+        self._dock_toggle_btn.setIconSize(icon_size)
+        self._dock_toggle_btn.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.SP_TitleBarNormalButton)
+        )
+        self._dock_toggle_btn.clicked.connect(self._on_toggle_floating)
+        lay.addWidget(self._dock_toggle_btn)
+
+        close_btn = QtWidgets.QToolButton()
+        close_btn.setAutoRaise(True)
+        close_btn.setFixedSize(btn_size, btn_size)
+        close_btn.setIconSize(icon_size)
+        close_btn.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_TitleBarCloseButton))
+        close_btn.setToolTip("Close (hide) this panel.")
+        close_btn.clicked.connect(self.close)
+        lay.addWidget(close_btn)
+
+        self.topLevelChanged.connect(self._on_top_level_changed)
+        self._update_dock_toggle_button()
+        self._title_bar = bar
+        return bar
+
     def _new_chat(self) -> None:
         # Stop (don't "remove-then-clear") -- _transcript.clear() below already
         # wipes the placeholder; a stale self._thinking_pos would otherwise
@@ -307,6 +354,20 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         self._transcript.clear()
         self._pending = None
         self._open_form_btn.setEnabled(False)
+
+    def _on_toggle_floating(self) -> None:
+        self.setFloating(not self.isFloating())
+
+    def _on_top_level_changed(self, _floating: bool) -> None:
+        self._update_dock_toggle_button()
+
+    def _update_dock_toggle_button(self) -> None:
+        floating = self.isFloating()
+        self._dock_toggle_btn.setToolTip(
+            "Dock this panel back into the main window."
+            if floating
+            else "Undock this panel into a floating window."
+        )
 
     def _open_settings(self) -> None:
         dlg = AutoPilotSettingsDialog(self._settings, self)

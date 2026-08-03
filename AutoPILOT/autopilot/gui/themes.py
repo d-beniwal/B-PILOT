@@ -141,11 +141,12 @@ def build_dock_stylesheet(theme: Theme, font_size: int) -> str:
         {font_rule}
         font-size: {font_size}px;
     }}
-    {sel}::title {{
+    {sel} QWidget#AutoPILOTTitleBar {{
         background: {theme.panel};
-        color: {theme.accent};
-        padding: 6px 8px;
         border-bottom: 1px solid {theme.accent};
+    }}
+    {sel} QLabel#AutoPILOTTitleLabel {{
+        color: {theme.accent};
         font-weight: bold;
         letter-spacing: 1px;
     }}
