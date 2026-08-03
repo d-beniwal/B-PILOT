@@ -39,11 +39,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(S.px(1500), S.px(900))
         self.setMinimumSize(S.px(980), S.px(600))
         # AutoPILOT is the only dock widget, but nesting still widens Qt's own
-        # redock hit-testing along an edge (see _sync_autopilot_dock).
+        # redock hit-testing along an edge (see the AutoPILOT dock setup below).
         self.setDockNestingEnabled(True)
 
         self._last_launch_experiment: str | None = None
         self._exp_probe_inflight = False
+        self._viewer_pid: int | None = None
+        self._viewer_poll_timer: QtCore.QTimer | None = None
+        self._main_split_saved_sizes: list[int] | None = None
 
         self.ribbon = PanelRibbon()
         self.runner = PlanRunnerPanel(ribbon=self.ribbon)
@@ -71,29 +74,53 @@ class MainWindow(QtWidgets.QMainWindow):
         clay.setSpacing(0)
         clay.addWidget(self._build_toolbar())
 
-        main_split = S.Splitter(QtCore.Qt.Horizontal)
-        S.configure_splitter(main_split)
-        main_split.addWidget(self.runner)
-        main_split.addWidget(self._build_right_panel())
-        main_split.setStretchFactor(0, 1)
-        main_split.setStretchFactor(1, 1)
-        main_split.setSizes([840, 620])
+        self._main_split = S.Splitter(QtCore.Qt.Horizontal)
+        S.configure_splitter(self._main_split)
+        self._main_split.addWidget(self.runner)
+        self._main_split.addWidget(self._build_right_panel())
+        self._main_split.setStretchFactor(0, 1)
+        self._main_split.setStretchFactor(1, 1)
+        self._main_split.setSizes([840, 620])
+        self.runner.bothPanelsMinimizedChanged.connect(self._on_runner_both_minimized)
 
         row = QtWidgets.QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
         row.addWidget(self.ribbon)
-        row.addWidget(main_split, 1)
+        row.addWidget(self._main_split, 1)
         clay.addLayout(row, 1)
 
         self.setCentralWidget(central)
 
-        # Optional AutoPILOT chat dock -- off by default, absent entirely if
-        # AutoPILOT/ isn't there or its deps aren't installed (see
-        # gui_qt/autopilot_bridge.py); enabled via Configuration -> Appearance.
+        # Data Viewer: always has a ribbon tab, launched as a detached,
+        # independent process (see _toggle_viewer) -- best-effort highlight
+        # only (pid-liveness polling), since it isn't a panel of this window.
+        self.ribbon.register_tab("viewer", "Data Viewer", self._toggle_viewer)
+
+        # AutoPILOT chat dock: created once, right here, whenever AutoPILOT/
+        # is present and importable (see gui_qt/autopilot_bridge.py) -- its
+        # ribbon tab and menu checkbox thereafter only toggle *visibility*,
+        # never existence, so the tab is always there per the ribbon's
+        # permanent-tab design (see panel_ribbon.py).
         self.autopilot_chat = None
         self._autopilot_collapsible = None
-        self._sync_autopilot_dock()
+        if autopilot_bridge.AVAILABLE:
+            self.autopilot_chat = autopilot_bridge.ChatDockWidget(self.runner, self)
+            # Left/right only (never top/bottom) -- a chat panel is unusable as
+            # a thin horizontal strip, and narrowing the allowed areas also
+            # stops the top/bottom corners from competing with the right edge
+            # for Qt's redock-target hit-testing.
+            self.autopilot_chat.setAllowedAreas(
+                QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea
+            )
+            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.autopilot_chat)
+            self.autopilot_chat.setVisible(bool(config.get("autopilot_enabled")))
+            self.autopilot_chat.visibilityChanged.connect(
+                self._on_autopilot_visibility_changed
+            )
+            self._autopilot_collapsible = CollapsibleDockPanel(
+                self.autopilot_chat, self.ribbon, "autopilot", "AutoPILOT"
+            )
 
         self._build_menu()
         self.statusBar().showMessage(
@@ -247,7 +274,7 @@ class MainWindow(QtWidgets.QMainWindow):
         act_viewer.setToolTip(
             "Open the data viewer in a separate, independent window/process."
         )
-        act_viewer.triggered.connect(self._open_viewer)
+        act_viewer.triggered.connect(self._toggle_viewer)
 
         self._act_autopilot = pym.addAction("AutoPILOT")
         self._act_autopilot.setCheckable(True)
@@ -290,7 +317,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # nothing else to push.
             device_source.set_beamline(config.get("beamline"))
             self.runner.apply_config()
-            self._sync_autopilot_dock()
+            self._sync_autopilot_visibility()
             self._act_autopilot.blockSignals(True)
             self._act_autopilot.setChecked(bool(config.get("autopilot_enabled")))
             self._act_autopilot.blockSignals(False)
@@ -307,37 +334,30 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
 
     def _on_autopilot_toggled(self, checked: bool) -> None:
-        config.update({"autopilot_enabled": checked})
-        self._sync_autopilot_dock()
+        if self.autopilot_chat is not None:
+            self.autopilot_chat.setVisible(checked)
 
-    def _sync_autopilot_dock(self) -> None:
-        """Create or tear down the AutoPILOT chat dock to match the current
-        "Enable the AutoPILOT chat panel" setting (Configuration -> Appearance).
+    def _sync_autopilot_visibility(self) -> None:
+        """Show/hide the AutoPILOT chat dock to match the current "Enable
+        the AutoPILOT chat panel" setting (Configuration -> Appearance).
 
-        Called once at startup and again after every Configuration save, so
+        The dock itself is created once, at startup (see __init__), and
+        never destroyed — its ribbon tab is permanent, so this only ever
+        toggles visibility. Called after every Configuration save, so
         toggling the checkbox takes effect immediately — no restart needed.
         """
-        want = autopilot_bridge.AVAILABLE and bool(config.get("autopilot_enabled"))
-        have = self.autopilot_chat is not None
-        if want and not have:
-            self.autopilot_chat = autopilot_bridge.ChatDockWidget(self.runner, self)
-            # Left/right only (never top/bottom) -- a chat panel is unusable as
-            # a thin horizontal strip, and narrowing the allowed areas also
-            # stops the top/bottom corners from competing with the right edge
-            # for Qt's redock-target hit-testing.
-            self.autopilot_chat.setAllowedAreas(
-                QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea
-            )
-            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, self.autopilot_chat)
-            self._autopilot_collapsible = CollapsibleDockPanel(
-                self.autopilot_chat, self.ribbon, "autopilot", "AutoPILOT"
-            )
-        elif have and not want:
-            self._autopilot_collapsible.detach()
-            self._autopilot_collapsible = None
-            self.removeDockWidget(self.autopilot_chat)
-            self.autopilot_chat.deleteLater()
-            self.autopilot_chat = None
+        if self.autopilot_chat is not None:
+            self.autopilot_chat.setVisible(bool(config.get("autopilot_enabled")))
+
+    def _on_autopilot_visibility_changed(self, visible: bool) -> None:
+        """Keep config + the menu checkbox in sync no matter what changed
+        the dock's visibility (ribbon tab, title-bar close, menu, config)."""
+        config.update({"autopilot_enabled": visible})
+        act = getattr(self, "_act_autopilot", None)
+        if act is not None:
+            act.blockSignals(True)
+            act.setChecked(visible)
+            act.blockSignals(False)
 
     def _restart_kernel(self) -> None:
         # The kernel runs detached (client-only connection), so "restart" is a
@@ -618,15 +638,65 @@ class MainWindow(QtWidgets.QMainWindow):
             self.console.load_bluesky()
             self._set_toolbar_status("Loaded Bluesky startup.")
 
-    def _open_viewer(self) -> None:
-        """Launch the Bluesky data viewer as a detached, independent process."""
-        ok, _pid = QtCore.QProcess.startDetached(
+    def _toggle_viewer(self) -> None:
+        """Launch the Bluesky data viewer as a detached, independent process,
+        or report it's already running.
+
+        The viewer is a fully separate process (not a dock/panel of this
+        window), so its ribbon tab can only track *a* launched instance's
+        liveness by polling its pid — best-effort, not true window focus.
+        """
+        if self._viewer_pid is not None and self._is_pid_alive(self._viewer_pid):
+            self._set_toolbar_status("Viewer already running — look for its window.")
+            return
+        ok, pid = QtCore.QProcess.startDetached(
             sys.executable, ["-m", "gui_qt.viewer"], paths.PKG_PARENT
         )
-        if ok:
-            self._set_toolbar_status("Opened Bluesky Viewer (separate window).")
-        else:
+        if not ok:
             self._set_toolbar_status("Could not launch the viewer.", error=True)
+            return
+        self._set_toolbar_status("Opened Bluesky Viewer (separate window).")
+        self._viewer_pid = pid
+        self.ribbon.set_active("viewer", True)
+        if self._viewer_poll_timer is None:
+            self._viewer_poll_timer = QtCore.QTimer(self)
+            self._viewer_poll_timer.setInterval(2000)
+            self._viewer_poll_timer.timeout.connect(self._poll_viewer_alive)
+        self._viewer_poll_timer.start()
+
+    def _poll_viewer_alive(self) -> None:
+        if self._viewer_pid is None or not self._is_pid_alive(self._viewer_pid):
+            self._viewer_pid = None
+            self.ribbon.set_active("viewer", False)
+            self._viewer_poll_timer.stop()
+
+    @staticmethod
+    def _is_pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    def _on_runner_both_minimized(self, both: bool) -> None:
+        """Let the console reclaim the runner's width when Plans-list and
+        Plan-form are both minimized (and give it back when either restores).
+
+        Minimizing just one of the two only redistributes space inside the
+        runner's own inner splitter (unaffected by this) — only the "both"
+        case shrinks the *outer* split's runner pane down to a thin strip.
+        """
+        if both:
+            self._main_split_saved_sizes = self._main_split.sizes()
+            total = sum(self._main_split_saved_sizes)
+            runner_min = max(self.runner.minimumSizeHint().width(), S.px(40))
+            self._main_split.setStretchFactor(0, 0)
+            self._main_split.setSizes([runner_min, total - runner_min])
+        else:
+            self._main_split.setStretchFactor(0, 1)
+            if self._main_split_saved_sizes is not None:
+                self._main_split.setSizes(self._main_split_saved_sizes)
+                self._main_split_saved_sizes = None
 
     def _set_toolbar_status(self, msg: str, *, error: bool = False) -> None:
         self._toolbar_status.setStyleSheet(f"color: {S.ERROR if error else S.MUTED};")

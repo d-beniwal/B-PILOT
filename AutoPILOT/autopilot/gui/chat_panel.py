@@ -229,36 +229,51 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         body = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(body)
 
-        header_row = QtWidgets.QHBoxLayout()
-        self._model_caption = QtWidgets.QLabel(f"Model: {self._worker.client.model}")
-        # Color is set from the active theme in `_apply_settings` -- a
-        # widget's own stylesheet otherwise wins over the dock-wide QSS's
-        # `QLabel` rule, which would leave this one label stuck on
-        # B-PILOT's muted grey regardless of theme.
-        header_row.addWidget(self._model_caption, 1)
+        # Two rows so the header doesn't force the dock wider than the
+        # transcript/composer need: prefixes + the buttons on row 0, the
+        # actual model/catalog names (the variable-width part) on row 1,
+        # each name under its own prefix.
+        header_grid = QtWidgets.QGridLayout()
+        header_grid.setContentsMargins(0, 0, 0, 0)
+        header_grid.setHorizontalSpacing(8)
+        header_grid.setVerticalSpacing(0)
+
+        self._model_prefix = QtWidgets.QLabel("Model:")
+        header_grid.addWidget(self._model_prefix, 0, 0)
         # Hidden unless a local testing catalog override is set (see
         # settings_dialog.py's "Testing (local only)" card) -- must stay
         # visible whenever active so a tester can't forget it's on.
-        self._catalog_override_caption = QtWidgets.QLabel()
-        self._catalog_override_caption.setVisible(False)
-        header_row.addWidget(self._catalog_override_caption)
+        self._catalog_prefix = QtWidgets.QLabel("Catalog override:")
+        self._catalog_prefix.setVisible(False)
+        header_grid.addWidget(self._catalog_prefix, 0, 1)
+        header_grid.setColumnStretch(2, 1)
         self._open_form_btn = QtWidgets.QPushButton("Open in form")
         self._open_form_btn.setToolTip(
             "Load the most recent proposed plan into B-PILOT's plan-runner form for review."
         )
         self._open_form_btn.setEnabled(False)
         self._open_form_btn.clicked.connect(self._on_open_in_form)
-        header_row.addWidget(self._open_form_btn)
+        header_grid.addWidget(self._open_form_btn, 0, 3)
         new_chat_btn = QtWidgets.QPushButton("New Chat")
         new_chat_btn.setToolTip("Clear the transcript and start a fresh conversation (no memory of prior turns).")
         new_chat_btn.clicked.connect(self._new_chat)
-        header_row.addWidget(new_chat_btn)
+        header_grid.addWidget(new_chat_btn, 0, 4)
         settings_btn = QtWidgets.QPushButton("⚙")
         settings_btn.setFixedWidth(bpilot_style.px(28))
         settings_btn.setToolTip("AutoPILOT settings")
         settings_btn.clicked.connect(self._open_settings)
-        header_row.addWidget(settings_btn)
-        layout.addLayout(header_row)
+        header_grid.addWidget(settings_btn, 0, 5)
+
+        # Color is set from the active theme in `_apply_settings` -- a
+        # widget's own stylesheet otherwise wins over the dock-wide QSS's
+        # `QLabel` rule, which would leave this one label stuck on
+        # B-PILOT's muted grey regardless of theme.
+        self._model_caption = QtWidgets.QLabel(self._worker.client.model)
+        header_grid.addWidget(self._model_caption, 1, 0)
+        self._catalog_override_caption = QtWidgets.QLabel()
+        self._catalog_override_caption.setVisible(False)
+        header_grid.addWidget(self._catalog_override_caption, 1, 1)
+        layout.addLayout(header_grid)
 
         self._transcript = QtWidgets.QTextEdit()
         self._transcript.setReadOnly(True)
@@ -306,13 +321,18 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         self._worker.reconfigure(
             model=s["model"], base_url=s["argo_base_url"], api_key=s["argo_api_key"], temperature=s["temperature"]
         )
-        self._model_caption.setText(f"Model: {self._worker.client.model}")
+        self._model_caption.setText(self._worker.client.model)
+        self._model_prefix.setStyleSheet(f"color: {self._theme.muted}; font-size: 10px;")
         self._model_caption.setStyleSheet(f"color: {self._theme.muted}; font-size: 10px;")
         override = s.get("databroker_catalog_override", "")
-        self._catalog_override_caption.setText(f"catalog override: {override}")
+        self._catalog_override_caption.setText(override)
+        self._catalog_prefix.setStyleSheet(
+            f"color: {self._theme.accent}; font-size: 10px; font-weight: bold;"
+        )
         self._catalog_override_caption.setStyleSheet(
             f"color: {self._theme.accent}; font-size: 10px; font-weight: bold;"
         )
+        self._catalog_prefix.setVisible(bool(override))
         self._catalog_override_caption.setVisible(bool(override))
         # Dock-scoped stylesheet: overrides B-PILOT's app-wide (light) QSS for
         # just this dock and its children -- see `themes.build_dock_stylesheet`.

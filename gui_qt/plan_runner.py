@@ -51,6 +51,10 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     runRequested = QtCore.pyqtSignal(str, str)
     # emitted with (command_text, run_notes) when the user clicks Add to Queue
     queueRequested = QtCore.pyqtSignal(str, str)
+    # emitted when Plans-list and Plan-form are both minimized, or when they
+    # stop both being minimized -- lets the main window reclaim the freed
+    # width for the console (see main_window._on_runner_both_minimized).
+    bothPanelsMinimizedChanged = QtCore.pyqtSignal(bool)
 
     def __init__(self, parent=None, *, ribbon=None) -> None:
         """Build the panel and populate the file browser + plan dropdown.
@@ -78,6 +82,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         # alongside every other param-grid rebuild in `_clear_param_grid`.
         self._skeleton: tuple[str, bool] | None = None
         self._motor_rows_widget: MotorRowsWidget | None = None
+        self._both_minimized_last = False
 
         self._build_ui()
         self._populate_file_browser()
@@ -122,7 +127,8 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         split.addWidget(fb_card)
         if self._ribbon is not None:
             self._fb_collapsible = CollapsibleSplitterPanel(
-                split, fb_card, self._ribbon, "plans", "Plans list"
+                split, fb_card, self._ribbon, "plans", "Plans list",
+                on_change=self._update_both_minimized,
             )
             fb_min_btn.clicked.connect(self._fb_collapsible.minimize)
 
@@ -238,9 +244,18 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         split.setSizes([190, 560])
         if self._ribbon is not None:
             self._form_collapsible = CollapsibleSplitterPanel(
-                split, right, self._ribbon, "planform", "Plan form"
+                split, right, self._ribbon, "planform", "Plan form",
+                on_change=self._update_both_minimized,
             )
             form_min_btn.clicked.connect(self._form_collapsible.minimize)
+
+    def _update_both_minimized(self) -> None:
+        """Notify listeners when Plans-list + Plan-form's combined minimized
+        state flips, so the main window can reclaim/return the freed width."""
+        both = self._fb_collapsible.is_minimized and self._form_collapsible.is_minimized
+        if both != self._both_minimized_last:
+            self._both_minimized_last = both
+            self.bothPanelsMinimizedChanged.emit(both)
 
     # ── Console-readiness (set by the main window) ──────────────────────────────
 
