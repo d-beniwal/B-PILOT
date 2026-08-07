@@ -236,6 +236,16 @@ def resolve(theme_key: str | None) -> Theme:
     return THEMES.get(theme_key or "", THEMES[DEFAULT_THEME_KEY])
 
 
+# Fixed, theme-independent color for the toolbar profile switcher. Deliberately
+# NOT the shared ACCENT token: ACCENT is orange in the Light and Dark themes
+# (it's this app's primary-button color), which made the switcher's fill and
+# its dropdown's selection highlight both read as orange -- confusing next to
+# unrelated warning/attention coloring elsewhere. This one control keeps a
+# fixed blue across all three themes instead.
+PROFILE_SWITCHER_BG = "#2f6fed"
+PROFILE_SWITCHER_BG_HOVER = "#2358c4"
+
+
 # Fixed-width font stack. Naming real per-platform families (rather than the
 # generic "monospace") lets Qt resolve immediately. Theme-independent.
 MONO_FAMILIES = ["Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"]
@@ -466,6 +476,29 @@ def stylesheet(
     QPushButton#primary:pressed {{ background: {t.accent_d}; }}
     QPushButton#primary:disabled {{ background: {t.primary_disabled_bg}; color: {t.disabled_text}; border-color: {t.primary_disabled_border}; }}
 
+    /* Toolbar profile switcher: same accent-filled "primary action" look as
+       QPushButton#primary above, just larger -- this is the highest-traffic
+       control in the toolbar (it drives device/plan discovery), so it needs
+       to read as unmissable next to the plain "Bluesky dir" field. */
+    QComboBox#profileSwitcher {{
+        color: white; font-weight: 700; font-size: {px(15)}px;
+        background: {PROFILE_SWITCHER_BG};
+        border: 2px solid {PROFILE_SWITCHER_BG_HOVER};
+        border-radius: {px(6)}px;
+        padding: {px(4)}px {px(10)}px;
+        min-height: {px(22)}px;
+    }}
+    QComboBox#profileSwitcher:hover {{ background: {PROFILE_SWITCHER_BG_HOVER}; }}
+    QComboBox#profileSwitcher:disabled {{
+        background: {t.primary_disabled_bg}; color: {t.disabled_text}; border-color: {t.primary_disabled_border};
+    }}
+    /* Popup item colors for this combo are enforced by ContrastItemDelegate
+       (see below) instead of a QAbstractItemView stylesheet rule -- Qt's
+       item-view text rendering picks up a faint tint derived from the
+       current QPalette.Highlight color for non-selected rows, which a
+       stylesheet selector cannot override. The delegate sets the palette
+       directly at paint time, which does take effect. */
+
     /* ── Inputs ───────────────────────────────────────────────── */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {{
         background: {t.input_bg}; color: {t.input_fg};
@@ -652,6 +685,37 @@ class NoScrollComboBox(QtWidgets.QComboBox):
     def wheelEvent(self, e) -> None:  # noqa: N802
         """Ignore the wheel so it scrolls the panel, not the selection."""
         e.ignore()
+
+
+class ContrastItemDelegate(QtWidgets.QStyledItemDelegate):
+    """Item delegate that forces readable colors on every popup row.
+
+    Qt's item-view painting derives a faint tint for non-selected rows' text
+    from the current ``QPalette.Highlight`` color -- a stylesheet
+    ``QAbstractItemView`` selector cannot override this (it's resolved from
+    the palette at paint time, not from CSS), so under a themed app palette
+    it can render as near-invisible text. Overriding ``initStyleOption`` to
+    set the palette colors directly on each row's paint option is the one
+    approach that reliably takes effect.
+    """
+
+    def __init__(self, bg: str, fg: str, highlight_bg: str, highlight_fg: str, parent=None) -> None:
+        """Fix `bg`/`fg` for normal rows and `highlight_bg`/`highlight_fg` for the selected row."""
+        super().__init__(parent)
+        self._bg = bg
+        self._fg = fg
+        self._highlight_bg = highlight_bg
+        self._highlight_fg = highlight_fg
+
+    def initStyleOption(self, option, index) -> None:  # noqa: N802
+        """Force the paint-time palette so text stays readable regardless of the app theme."""
+        super().initStyleOption(option, index)
+        from PyQt5 import QtGui
+
+        option.palette.setColor(QtGui.QPalette.Base, QtGui.QColor(self._bg))
+        option.palette.setColor(QtGui.QPalette.Text, QtGui.QColor(self._fg))
+        option.palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(self._highlight_bg))
+        option.palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(self._highlight_fg))
 
 
 class HoverTip(QtCore.QObject):

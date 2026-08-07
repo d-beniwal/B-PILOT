@@ -136,6 +136,27 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.setContentsMargins(10, 6, 10, 6)
         lay.setSpacing(6)
 
+        lay.addWidget(QtWidgets.QLabel("Profile:"))
+        self._profile_combo = S.NoScrollComboBox()
+        self._profile_combo.setObjectName("profileSwitcher")
+        self._profile_combo.setToolTip(
+            "Active beamline profile -- drives device/plan discovery, paths, "
+            "and launch settings. Locked while a console/kernel is running; "
+            "shut it down first to switch."
+        )
+        # Qt's item-view painting derives non-selected rows' text color from
+        # a tint of the current QPalette.Highlight color, which a
+        # QAbstractItemView stylesheet selector cannot override (it's
+        # resolved from the palette at paint time). A delegate that forces
+        # the palette per-row is the fix -- see ContrastItemDelegate.
+        self._profile_combo_delegate = S.ContrastItemDelegate(
+            S.INPUT_BG, S.INPUT_FG, S.PROFILE_SWITCHER_BG, "white", parent=self._profile_combo,
+        )
+        self._profile_combo.view().setItemDelegate(self._profile_combo_delegate)
+        self._refresh_profile_switcher()
+        self._profile_combo.currentTextChanged.connect(self._on_profile_switcher_changed)
+        lay.addWidget(self._profile_combo)
+
         lay.addWidget(QtWidgets.QLabel("Bluesky dir:"))
         self._workdir = QtWidgets.QLineEdit(_DEFAULT_LAUNCH_DIR)
         self._workdir.setMinimumWidth(S.px(160))
@@ -185,6 +206,50 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if chosen:
             self._workdir.setText(chosen)
+
+    def _refresh_profile_switcher(self) -> None:
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.clear()
+        self._profile_combo.addItems(config.list_profiles())
+        idx = self._profile_combo.findText(config.active_profile())
+        self._profile_combo.setCurrentIndex(max(0, idx))
+        self._profile_combo.blockSignals(False)
+
+    def _apply_profile_change(self, notify: str) -> None:
+        """Refresh everything derived from the active profile.
+
+        Shared by the Configuration dialog's Save and the toolbar profile
+        switcher -- both just flip the active profile and need the same
+        follow-up: the device catalog is cached per beamline, and the plan
+        browser scope depends on the profile's configured plan files.
+        """
+        device_source.set_beamline(config.get("beamline"))
+        self.runner.apply_config()
+        self._sync_autopilot_visibility()
+        self._act_autopilot.blockSignals(True)
+        self._act_autopilot.setChecked(bool(config.get("autopilot_enabled")))
+        self._act_autopilot.blockSignals(False)
+        self._set_toolbar_status(notify)
+
+    def _on_profile_switcher_changed(self, name: str) -> None:
+        if not name or name == config.active_profile():
+            return
+        old_scale = config.get("ui_scale")
+        old_theme = config.get("theme")
+        old_font = config.get("font_family")
+        config.set_active_profile(name)
+        self._apply_profile_change(f"Switched to profile '{name}'.")
+        if (
+            config.get("ui_scale") != old_scale
+            or config.get("theme") != old_theme
+            or config.get("font_family") != old_font
+        ):
+            QtWidgets.QMessageBox.information(
+                self,
+                "Restart required",
+                "Restart B-PILOT for the new profile's appearance settings "
+                "to take effect.",
+            )
 
     # ── Right panel: console + notes ────────────────────────────────────────────
 
@@ -311,17 +376,11 @@ class MainWindow(QtWidgets.QMainWindow):
         old_font = config.get("font_family")
         dlg = ConfigDialog(self)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
-            # Re-scan the plan browser with the new files scope, and refresh
-            # the device catalog for the (possibly new) active profile's
-            # beamline — the console reads the launch command live, so
-            # nothing else to push.
-            device_source.set_beamline(config.get("beamline"))
-            self.runner.apply_config()
-            self._sync_autopilot_visibility()
-            self._act_autopilot.blockSignals(True)
-            self._act_autopilot.setChecked(bool(config.get("autopilot_enabled")))
-            self._act_autopilot.blockSignals(False)
-            self._set_toolbar_status("Configuration saved.")
+            # The dialog may have created/deleted/renamed profiles or
+            # switched the active one — refresh the toolbar switcher's item
+            # list and selection to match before pushing the derived state.
+            self._refresh_profile_switcher()
+            self._apply_profile_change("Configuration saved.")
             if (
                 config.get("ui_scale") != old_scale
                 or config.get("theme") != old_theme
@@ -474,6 +533,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # activity immediately, instead of the blank interactive prompt.
             self._console_tabs.setCurrentWidget(self.session_log)
         self._workdir.setEnabled(False)
+        self._profile_combo.setEnabled(False)
         self._launch_btn.setEnabled(False)
         self._attach_btn.setEnabled(False)
         self._load_btn.setEnabled(True)
@@ -587,6 +647,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _reset_console_ui(self) -> None:
         """Return the toolbar/menu to the pre-launch state."""
         self._workdir.setEnabled(True)
+        self._profile_combo.setEnabled(True)
         self._launch_btn.setEnabled(True)
         self._attach_btn.setEnabled(True)
         self._load_btn.setEnabled(False)
