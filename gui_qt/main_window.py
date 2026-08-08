@@ -101,7 +101,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # is present and importable (see gui_qt/autopilot_bridge.py) -- its
         # ribbon tab and menu checkbox thereafter only toggle *visibility*,
         # never existence, so the tab is always there per the ribbon's
-        # permanent-tab design (see panel_ribbon.py).
+        # permanent-tab design (see panel_ribbon.py). When AutoPILOT isn't
+        # importable, the tab still stays put (never just missing) but wires
+        # to a diagnostic popup instead, so the failure is visible and
+        # actionable rather than a tab that silently isn't there.
         self.autopilot_chat = None
         self._autopilot_collapsible = None
         if autopilot_bridge.AVAILABLE:
@@ -120,6 +123,10 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self._autopilot_collapsible = CollapsibleDockPanel(
                 self.autopilot_chat, self.ribbon, "autopilot", "AutoPILOT"
+            )
+        else:
+            self.ribbon.register_tab(
+                "autopilot", "AutoPILOT", self._show_autopilot_diagnostics
             )
 
         self._build_menu()
@@ -391,6 +398,19 @@ class MainWindow(QtWidgets.QMainWindow):
                     "Restart required",
                     "Restart B-PILOT for the new appearance settings to take effect.",
                 )
+
+    def _show_autopilot_diagnostics(self) -> None:
+        """AutoPILOT's ribbon-tab click when it failed to load -- report
+        why instead of the tab doing nothing (see autopilot_bridge.diagnose,
+        which checks the folder + dependency failure modes .context/DEPLOY.md
+        calls out, then falls back to the raw import error)."""
+        issues = autopilot_bridge.diagnose()
+        detail = "\n\n".join(issues) or "AutoPILOT could not be loaded for an unknown reason."
+        QtWidgets.QMessageBox.warning(
+            self,
+            "AutoPILOT unavailable",
+            "AutoPILOT is not available in this B-PILOT checkout:\n\n" + detail,
+        )
 
     def _on_autopilot_toggled(self, checked: bool) -> None:
         if self.autopilot_chat is not None:
