@@ -21,6 +21,27 @@ from PyQt5 import QtWidgets
 from . import style as S
 
 
+def _ribbon_thickness(widget: QtWidgets.QWidget) -> int:
+    """Width of a ribbon tab across its short axis (the rotated text's line
+    height, not its length). Derived from `widget`'s *actual, live* font
+    metrics rather than a hard-coded pixel literal -- a fixed literal has no
+    way to track how large the OS is actually rendering the text (e.g. a
+    4K/HiDPI display with an increased OS-level display scale), so it can
+    fall short of one line of text and clip it.
+
+    Calls :meth:`QWidget.ensurePolished` first: the app-wide stylesheet's
+    ``font-size`` rule (see ``style.py``'s ``stylesheet()``) is only resolved
+    into a widget's effective ``font()`` once that widget has been polished
+    by the style engine, which normally doesn't happen until it's about to
+    be shown. Measuring beforehand silently reads the small pre-stylesheet
+    default font -- exactly the case here, since every ribbon tab is built
+    long before ``MainWindow.show()`` -- so the tab is sized for a font
+    smaller than what actually gets painted, clipping the label.
+    """
+    widget.ensurePolished()
+    return QtGui.QFontMetrics(widget.font()).height() + S.px(14)
+
+
 class VerticalTabButton(QtWidgets.QAbstractButton):
     """A ribbon tab: `label` rotated -90° so it reads bottom-to-top."""
 
@@ -31,9 +52,13 @@ class VerticalTabButton(QtWidgets.QAbstractButton):
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self._active = False
         self._update_tooltip()
+        # Must polish before measuring -- see _ribbon_thickness's docstring;
+        # the same stale-pre-stylesheet-font trap applies to the text length.
+        self.ensurePolished()
         fm = QtGui.QFontMetrics(self.font())
         self._text_len = fm.horizontalAdvance(label) + S.px(16)
-        self.setFixedWidth(S.px(26))
+        self._thickness = fm.height() + S.px(14)
+        self.setFixedWidth(self._thickness)
 
     def set_active(self, active: bool) -> None:
         """Mark whether this tab's panel is currently shown; repaint + retip."""
@@ -47,8 +72,8 @@ class VerticalTabButton(QtWidgets.QAbstractButton):
         self.setToolTip(f"Hide {self.text()}" if self._active else f"Show {self.text()}")
 
     def sizeHint(self) -> QtCore.QSize:  # noqa: N802
-        """Fixed ribbon width; length follows the rotated label."""
-        return QtCore.QSize(S.px(26), self._text_len)
+        """Font-derived ribbon thickness; length follows the rotated label."""
+        return QtCore.QSize(self._thickness, self._text_len)
 
     def enterEvent(self, event) -> None:  # noqa: N802
         """Repaint for hover -- custom-painted buttons don't do this for free."""
@@ -111,7 +136,7 @@ class PanelRibbon(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         """Build the empty ribbon strip."""
         super().__init__(parent)
-        self.setFixedWidth(S.px(26))
+        self.setFixedWidth(_ribbon_thickness(self))
         self._layout = QtWidgets.QVBoxLayout(self)
         self._layout.setContentsMargins(0, S.px(4), 0, 0)
         self._layout.setSpacing(S.px(2))
