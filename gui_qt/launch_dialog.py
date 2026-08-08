@@ -4,11 +4,20 @@ file before a kernel starts, so the experiment banner shown once it's running
 """
 from __future__ import annotations
 
+import os
+
 from PyQt5 import QtWidgets
 
 from . import config
 
 _DEFAULT_SETUP_FILE = "exp_setup.yml"
+
+
+def _experiment_dir(experiment: str) -> str:
+    """Path where ``instrument/session_logs.py`` expects this experiment's
+    data/log folder — created by the beamline's data-management setup, never
+    by B-PILOT."""
+    return os.path.join(os.path.expanduser("~"), "new_data", experiment)
 
 
 class LaunchDialog(QtWidgets.QDialog):
@@ -66,6 +75,24 @@ class LaunchDialog(QtWidgets.QDialog):
     def _update_ok_enabled(self) -> None:
         ok_btn = self._buttons.button(QtWidgets.QDialogButtonBox.Ok)
         ok_btn.setEnabled(bool(self._experiment.text().strip()))
+
+    def accept(self) -> None:
+        experiment = self.experiment()
+        exp_dir = _experiment_dir(experiment)
+        if experiment and not os.path.isdir(exp_dir):
+            ans = QtWidgets.QMessageBox.warning(
+                self,
+                "Experiment directory not found",
+                f"No directory found for experiment {experiment!r}:\n\n{exp_dir}\n\n"
+                "This folder is created by the beamline's data-management setup, "
+                "not by B-PILOT — double-check the experiment name.\n\n"
+                "Launch anyway?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if ans != QtWidgets.QMessageBox.Yes:
+                return
+        super().accept()
 
     def experiment(self) -> str:
         return self._experiment.text().strip()
