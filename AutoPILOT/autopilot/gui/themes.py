@@ -150,6 +150,13 @@ def build_dock_stylesheet(theme: Theme, font_size: int) -> str:
         font-weight: bold;
         letter-spacing: 1px;
     }}
+    {sel} QLabel#AutoPILOTTitleSep {{
+        color: {theme.muted};
+    }}
+    {sel} QLabel#AutoPILOTTitleModelLabel {{
+        color: {theme.accent2};
+        font-weight: normal;
+    }}
     {sel} QWidget {{
         background: {theme.bg};
         color: {theme.text};
@@ -171,6 +178,21 @@ def build_dock_stylesheet(theme: Theme, font_size: int) -> str:
         color: {theme.bg};
     }}
     {sel} QPushButton:pressed {{
+        background: {theme.accent2};
+        border-color: {theme.accent2};
+    }}
+    {sel} QPushButton#OpenInFormButton:disabled {{
+        background: {theme.panel};
+        color: {theme.muted};
+        border: 1px solid {theme.border};
+    }}
+    {sel} QPushButton#OpenInFormButton:enabled {{
+        background: {theme.accent};
+        color: {theme.bg};
+        border: 1px solid {theme.accent};
+        font-weight: bold;
+    }}
+    {sel} QPushButton#OpenInFormButton:enabled:hover {{
         background: {theme.accent2};
         border-color: {theme.accent2};
     }}

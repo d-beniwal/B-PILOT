@@ -32,6 +32,7 @@ from .settings_dialog import AutoPilotSettingsDialog
 
 ensure_bpilot_on_path()
 
+from gui_qt import config as bpilot_config  # noqa: E402
 from gui_qt import style as bpilot_style  # noqa: E402
 
 
@@ -230,57 +231,48 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         body = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(body)
 
-        # Two rows so the header doesn't force the dock wider than the
-        # transcript/composer need: prefixes + the buttons on row 0, the
-        # actual model/catalog names (the variable-width part) on row 1,
-        # each name under its own prefix.
-        header_grid = QtWidgets.QGridLayout()
-        header_grid.setContentsMargins(0, 0, 0, 0)
-        header_grid.setHorizontalSpacing(8)
-        header_grid.setVerticalSpacing(0)
+        # Single row: catalog status on the left, action buttons on the
+        # right. The model name used to live here too, but now lives on the
+        # title bar next to the "AutoPILOT" heading (see `_build_title_bar`).
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
 
-        self._model_prefix = QtWidgets.QLabel("Model:")
-        header_grid.addWidget(self._model_prefix, 0, 0)
-        # Hidden unless a local testing catalog override is set (see
-        # settings_dialog.py's "Testing (local only)" card) -- must stay
-        # visible whenever active so a tester can't forget it's on.
-        self._catalog_prefix = QtWidgets.QLabel("Catalog override:")
-        self._catalog_prefix.setVisible(False)
-        header_grid.addWidget(self._catalog_prefix, 0, 1)
-        header_grid.setColumnStretch(2, 1)
+        # Text/color set in `_apply_settings()`: "Catalog: <name>" normally,
+        # or "Catalog override: <name>" (loud/bold) when a local testing
+        # override is active (see settings_dialog.py's "Testing (local
+        # only)" card) -- must stay visually loud whenever active so a
+        # tester can't forget it's on.
+        self._catalog_label = QtWidgets.QLabel()
+        header_row.addWidget(self._catalog_label)
+        header_row.addStretch(1)
         self._open_form_btn = QtWidgets.QPushButton("Open in form")
+        self._open_form_btn.setObjectName("OpenInFormButton")
         self._open_form_btn.setToolTip(
             "Load the most recent proposed plan into B-PILOT's plan-runner form for review."
         )
         self._open_form_btn.setEnabled(False)
         self._open_form_btn.clicked.connect(self._on_open_in_form)
-        header_grid.addWidget(self._open_form_btn, 0, 3)
+        header_row.addWidget(self._open_form_btn)
         new_chat_btn = QtWidgets.QPushButton("New Chat")
         new_chat_btn.setToolTip("Clear the transcript and start a fresh conversation (no memory of prior turns).")
         new_chat_btn.clicked.connect(self._new_chat)
-        header_grid.addWidget(new_chat_btn, 0, 4)
+        header_row.addWidget(new_chat_btn)
         settings_btn = QtWidgets.QPushButton("⚙")
         settings_btn.setFixedWidth(bpilot_style.px(28))
         settings_btn.setToolTip("AutoPILOT settings")
         settings_btn.clicked.connect(self._open_settings)
-        header_grid.addWidget(settings_btn, 0, 5)
-
-        # Color is set from the active theme in `_apply_settings` -- a
-        # widget's own stylesheet otherwise wins over the dock-wide QSS's
-        # `QLabel` rule, which would leave this one label stuck on
-        # B-PILOT's muted grey regardless of theme.
-        self._model_caption = QtWidgets.QLabel(self._worker.client.model)
-        header_grid.addWidget(self._model_caption, 1, 0)
-        self._catalog_override_caption = QtWidgets.QLabel()
-        self._catalog_override_caption.setVisible(False)
-        header_grid.addWidget(self._catalog_override_caption, 1, 1)
-        layout.addLayout(header_grid)
+        header_row.addWidget(settings_btn)
+        layout.addLayout(header_row)
 
         self._transcript = QtWidgets.QTextEdit()
         self._transcript.setReadOnly(True)
         self._transcript.setPlaceholderText(
-            "Describe a scan in plain English, e.g. "
-            "\"step scan samE from 0 to 10 mm in 21 steps, 1s exposure on pimega\"."
+            "Ask AutoPILOT to draft a scan, or ask about past runs. Examples:\n\n"
+            "• \"step scan samE from 0 to 10 mm in 21 steps, 1s exposure on pimega\"\n"
+            "• \"grid scan samX 0 to 5 mm in 11 steps, samY 0 to 2 mm in 5 steps, 0.5s on eiger\"\n"
+            "• \"how many expose runs aborted this week?\"\n"
+            "• \"what was scan 4874?\""
         )
         layout.addWidget(self._transcript, 1)
 
@@ -313,6 +305,21 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         self._title_label = QtWidgets.QLabel("AutoPILOT")
         self._title_label.setObjectName("AutoPILOTTitleLabel")
         lay.addWidget(self._title_label)
+
+        lay.addSpacing(6)
+        title_sep = QtWidgets.QLabel("|")
+        title_sep.setObjectName("AutoPILOTTitleSep")
+        lay.addWidget(title_sep)
+
+        lay.addSpacing(6)
+        # Text/style set in `_apply_settings()` -- `self._worker` (which owns
+        # the active model name) isn't constructed yet at this point in
+        # `__init__`. Elided (see `_apply_settings`) so a long model name
+        # can't crowd out the float/close buttons to the right.
+        self._title_model_label = QtWidgets.QLabel("")
+        self._title_model_label.setObjectName("AutoPILOTTitleModelLabel")
+        lay.addWidget(self._title_model_label)
+
         lay.addStretch(1)
 
         icon_size = QtCore.QSize(bpilot_style.px(12), bpilot_style.px(12))
@@ -382,19 +389,26 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         self._worker.reconfigure(
             model=s["model"], base_url=s["argo_base_url"], api_key=s["argo_api_key"], temperature=s["temperature"]
         )
-        self._model_caption.setText(self._worker.client.model)
-        self._model_prefix.setStyleSheet(f"color: {self._theme.muted}; font-size: 10px;")
-        self._model_caption.setStyleSheet(f"color: {self._theme.muted}; font-size: 10px;")
+        # Elided so a long model name can't crowd the float/close buttons
+        # off the title bar; the tooltip carries the untruncated name.
+        model_text = f"Model: {self._worker.client.model}"
+        metrics = QtGui.QFontMetrics(self._title_model_label.font())
+        self._title_model_label.setText(
+            metrics.elidedText(model_text, QtCore.Qt.ElideRight, bpilot_style.px(180))
+        )
+        self._title_model_label.setToolTip(model_text)
+
         override = s.get("databroker_catalog_override", "")
-        self._catalog_override_caption.setText(override)
-        self._catalog_prefix.setStyleSheet(
-            f"color: {self._theme.accent}; font-size: 10px; font-weight: bold;"
-        )
-        self._catalog_override_caption.setStyleSheet(
-            f"color: {self._theme.accent}; font-size: 10px; font-weight: bold;"
-        )
-        self._catalog_prefix.setVisible(bool(override))
-        self._catalog_override_caption.setVisible(bool(override))
+        if override:
+            catalog_text = f"Catalog override: {override}"
+            color, weight = self._theme.accent, "bold"
+        else:
+            catalog_name = bpilot_config.as_dict().get("databroker_catalog") or "(none configured)"
+            catalog_text = f"Catalog: {catalog_name}"
+            color, weight = self._theme.muted, "normal"
+        self._catalog_label.setText(catalog_text)
+        self._catalog_label.setToolTip(catalog_text)
+        self._catalog_label.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: {weight};")
         # Dock-scoped stylesheet: overrides B-PILOT's app-wide (light) QSS for
         # just this dock and its children -- see `themes.build_dock_stylesheet`.
         self.setStyleSheet(themes.build_dock_stylesheet(self._theme, s["font_size"]))
