@@ -104,7 +104,13 @@ class ContAcqButton(QtWidgets.QPushButton):
             return
         self._poll_inflight = True
         self._console.query_values(
-            {name: f"{name}.cam.acquire.get(as_string=True)" for name in names},
+            {
+                name: (
+                    "(lambda v: getattr(v, 'readback', v))"
+                    f"({name}.cam.acquire.get(as_string=True))"
+                )
+                for name in names
+            },
             self._on_status,
         )
 
