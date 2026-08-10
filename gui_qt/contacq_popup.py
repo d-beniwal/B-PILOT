@@ -233,6 +233,9 @@ class ContAcqPopup(QtWidgets.QFrame):
         )
         lines = f"{startup}\n{import_line}\n{re_line}" if startup else f"{import_line}\n{re_line}"
         self._console.run_code(lines)
+        midas_bridge.notify_interactive(
+            self._console, detectors, config.get("midas_bridge_enabled")
+        )
         self.close()
 
     def _stop(self, det_name: str) -> None:
