@@ -199,6 +199,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._load_btn.clicked.connect(self._load_bluesky)
         lay.addWidget(self._load_btn)
 
+        self._midas_bridge_checkbox = QtWidgets.QCheckBox("Bridge Live-View")
+        self._midas_bridge_checkbox.setChecked(bool(config.get("midas_bridge_enabled")))
+        self._midas_bridge_checkbox.setToolTip(
+            "When on, a Run/Queue dispatch that includes an area-detector "
+            "device auto-starts MIDAS_GUI's Live Data view on that "
+            "detector's PVA channel (no-op if MIDAS_GUI isn't running). "
+            "Turn off if MIDAS_GUI is being used for something else and "
+            "auto-starting Live Data would disrupt it."
+        )
+        self._midas_bridge_checkbox.toggled.connect(self._on_midas_bridge_toggled)
+        lay.addWidget(self._midas_bridge_checkbox)
+
         lay.addStretch(1)
         self._toolbar_status = QtWidgets.QLabel("")
         self._toolbar_status.setStyleSheet(f"color: {S.MUTED};")
@@ -214,6 +226,9 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if chosen:
             self._workdir.setText(chosen)
+
+    def _on_midas_bridge_toggled(self, checked: bool) -> None:
+        config.update({"midas_bridge_enabled": checked})
 
     def _refresh_profile_switcher(self) -> None:
         self._profile_combo.blockSignals(True)
@@ -237,6 +252,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._act_autopilot.blockSignals(True)
         self._act_autopilot.setChecked(bool(config.get("autopilot_enabled")))
         self._act_autopilot.blockSignals(False)
+        self._midas_bridge_checkbox.blockSignals(True)
+        self._midas_bridge_checkbox.setChecked(bool(config.get("midas_bridge_enabled")))
+        self._midas_bridge_checkbox.blockSignals(False)
         self._set_toolbar_status(notify)
 
     def _on_profile_switcher_changed(self, name: str) -> None:

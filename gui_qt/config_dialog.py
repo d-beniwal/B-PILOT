@@ -1002,8 +1002,9 @@ class ConfigDialog(QtWidgets.QDialog):
             "its EPICS prefix to a locally-running MIDAS_GUI so its Data "
             "Viewer auto-starts Live Data on that detector's PVA channel — "
             "zero clicks in MIDAS_GUI. No-op if MIDAS_GUI isn't running; "
-            "never launches it. Off by default; takes effect immediately on "
-            "Save, no restart needed."
+            "never launches it. On by default; also mirrored by the "
+            "toolbar's \"Bridge Live-View\" checkbox. Takes effect "
+            "immediately on Save, no restart needed."
         )
         card.body.addWidget(self._midas_bridge_enabled)
         return card
