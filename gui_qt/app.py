@@ -2,7 +2,7 @@
 
 Run it (from the ``B-PILOT/`` directory) via the top-level launcher::
 
-    conda activate mpe_bluesky_dev
+    conda activate bpilot_mpe_dev
     python launch.py
 
 or as a module::

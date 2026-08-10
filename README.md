@@ -37,15 +37,15 @@ time.
 ## Requirements
 
 A PyQt5 + Bluesky/ophyd environment. The environment this was developed and
-verified against ships with this repo at `environments/mpe_bluesky_dev.yml`
+verified against ships with this repo at `environments/bpilot_mpe_dev.yml`
 (PyQt5, qtconsole, ipykernel, bluesky, ophyd, databroker, queueserver, etc.,
-python 3.11) — copied from the parent `mpe_bluesky` workspace's
-`environments/` folder so B-PILOT stands alone as its own checkout. Create it
-with:
+python 3.11) — the beamline-capable variant, including `epics-base`/`hklpy`/
+`aps-dm-api` so `instrument.collection` fully imports on the beamline
+workstation. Create it with:
 
 ```bash
-conda env create -f environments/mpe_bluesky_dev.yml
-conda activate mpe_bluesky_dev
+conda env create -f environments/bpilot_mpe_dev.yml
+conda activate bpilot_mpe_dev
 ```
 
 ### Running against the beamline runtime env instead
@@ -53,7 +53,7 @@ conda activate mpe_bluesky_dev
 If you'd rather run B-PILOT inside the beamline's existing Bluesky env
 (`environment_2024_1.yml` in the parent workspace, the one the queueserver
 and `instrument.collection` actually run under) rather than
-`mpe_bluesky_dev`, it's missing one package the GUI needs:
+`bpilot_mpe_dev`, it's missing one package the GUI needs:
 
 - **`qtconsole`** (pulls in `QtPy`) — powers the embedded IPython console
   (`gui_qt/console_panel.py`). `environment_2024_1.yml` only installs
