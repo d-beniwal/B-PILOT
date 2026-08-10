@@ -1,28 +1,32 @@
-# mpe_bluesky_dev — DEV environment for the MPE PyQt plan-runner GUI
+# mpe_bluesky_dev — BEAMLINE environment for B-PILOT (GUI + AutoPILOT + kernel)
 # =====================================================================
-# Copied from ../../environments/mpe_bluesky_dev.yml (the mpe_bluesky
-# workspace) so B-PILOT is self-contained now that it's its own git repo.
-# Keep this in sync with that file if it changes there.
+# This is the BEAMLINE-capable variant: everything needed to run B-PILOT
+# fully on the beamline workstation, including the embedded kernel's
+# `from instrument.collection import *` (full instrument import, not just
+# the GUI process). It intentionally DIVERGES from the macOS dev-only copy
+# at ../../environments/mpe_bluesky_dev.yml (the `mpe_bluesky` workspace
+# project), which excludes hklpy/aps-dm-api because those don't resolve off
+# the APS Linux subnet. On the beamline network they're required and
+# included below.
 #
-# Purpose: a self-contained, *exactly pinned* environment for developing and
-# running the Qt Bluesky plan-runner GUI (gui/gui_qt) on a workstation,
-# plus enough of the Bluesky stack to exercise plans/viewer during dev.
+# Channels/version floors for the conda-only, APS-subnet-restricted packages
+# (epics-base, hklpy, aps-dm-api) mirror environment_2024_1.yml — the
+# beamline's baseline bluesky env — rather than exact pins, since those
+# packages have no pip wheels and must be solved fresh on the target
+# machine (apsu channel is APS-subnet only; this file cannot be conda-solved
+# from off-site). The GUI/Jupyter/Bluesky-Python stack below keeps its
+# exact `==` pins (PyPI wheels resolve the same way cross-platform for a
+# given version).
 #
-# This is NOT the beamline runtime env. The beamline uses the Linux
-# `environment_2024_1.yml` (apsu channel: epics-base, pvapy, aps-dm-api, hklpy,
-# pymca, xrayutilities, nexpy, ...), much of which is linux-64 / APS-subnet only
-# and does not solve on macOS. The versions below are pinned to what actually
-# resolves and runs the GUI on this machine (mirrored from the `3idc-bits` env).
+# Confirmed against instrument/ source: `from hkl import ...`
+# (s1idc_motors.py) needs hklpy; `import dm` / `from dm import ...`
+# (queueserver_framework.py, _apstools_data_management.py,
+# aps_data_management.py) needs aps-dm-api; `import epics`
+# (metadata.py, queueserver_framework.py, commissioning_jul25.py) needs
+# pyepics + epics-base.
 #
-# Intentionally EXCLUDED (not installable off the APS Linux subnet):
-#   - hkl / hklpy   (linux-64 only, apsu channel)  -> imported by instrument.*
-#   - dm / aps-dm-api (APS subnet only)            -> imported by instrument.*
-# instrument.collection therefore won't fully import here; that's expected on a
-# dev box. The GUI (AST-based plan parser, console, viewer, queue) does not
-# import `instrument` in-process, so GUI development is unaffected.
-#
-# create:
-#   conda env create -n mpe_bluesky_dev -f environments/mpe_bluesky_dev.yml
+# create (on the beamline workstation, on the APS subnet):
+#   conda env create -n mpe_bluesky_dev -f environments/mpe_bluesky_dev.yml --solver=libmamba
 # activate:
 #   conda activate mpe_bluesky_dev
 # run the GUI (from B-PILOT/):
@@ -31,7 +35,10 @@
 name: mpe_bluesky_dev
 
 channels:
+  # apsu first: gives an epics-base compatible with pyepics (see pip section)
+  - apsu
   - conda-forge
+  - aps-anl-tag
   - defaults
 
 dependencies:
@@ -39,24 +46,27 @@ dependencies:
   - python=3.11.15
   - pip
 
-  # --- everything else via pip, pinned exactly to the proven resolution -----
+  # --- full instrument import (conda-only; apsu channel; APS-subnet only) ---
+  # --- version floors match environment_2024_1.yml, not exact pins ---------
+  - epics-base >=7.0.5
+  - hklpy >=1.0.3
+  - aps-dm-api >=5
+
   - pip:
-      # --- Qt GUI stack (PyQt5 + qtconsole) --------------------------------
+      # =====================================================================
+      # SECTION 1 — overlaps with environment_2024_1.yml (the shared team's
+      # baseline bluesky_2024_1 conda env). Pip-pinned here for an exactly
+      # reproducible GUI-process solve; a couple of names differ from the
+      # conda package (PyQt5* ~= conda `pyqt =5`/`qt =5`, pyepics ~= conda
+      # `pyEpics`).
+      # =====================================================================
+
+      # --- Qt bindings (~= conda pyqt=5 / qt=5) ----------------------------
       - PyQt5==5.15.11
       - PyQt5-Qt5==5.15.19
       - PyQt5-sip==12.18.0
-      - qtconsole==5.7.2
-      - QtPy==2.4.3
 
-      # --- Jupyter kernel / messaging (embedded kernel, client, recorder) --
       - ipython==9.15.0
-      - ipykernel==7.3.0
-      - jupyter-client==8.9.1
-      - pyzmq==27.1.0
-      - traitlets==5.15.1
-
-      # --- plotting / data viewer ------------------------------------------
-      - matplotlib==3.11.0
 
       # --- Bluesky framework ------------------------------------------------
       - bluesky==1.15.1
@@ -68,36 +78,61 @@ dependencies:
       - bluesky-queueserver-api==0.0.13
       - bluesky-live==0.0.8
       - bluesky-widgets==0.0.18
-      - bluesky-tiled-plugins==2.0.8
       - area-detector-handlers==0.0.10
       - tiled==0.2.14
 
-      # --- AutoPILOT chat dock (optional; gui_qt/autopilot_bridge.py degrades
-      # --- gracefully if this isn't installed) ------------------------------
-      - anthropic==0.118.0
-      - event-model==1.24.0
-      - intake==0.6.4
-      - caproto==1.3.0
-
-      # --- EPICS client (no hardware contact during dev) -------------------
+      # --- EPICS client (~= conda pyEpics; needs epics-base above at runtime)
       - pyepics==3.5.10
 
       # --- scientific / data ------------------------------------------------
-      - numpy==2.3.5
-      - scipy==1.17.1
       - pandas==2.3.3
       - xarray==2026.7.0
       - h5py==3.16.0
       - hdf5plugin==7.0.0
-      - tifffile==2026.3.3
       - pint==0.25.3
-      - toolz==1.1.0
       - pymongo==4.17.0
-      - PyYAML==6.0.3
       - psutil==7.2.2
 
       # --- APS / MPE instrument utilities ----------------------------------
       - pyRestTable==2020.0.10
       - spec2nexus==2021.2.8
+
+      # =====================================================================
+      # SECTION 2 — B-PILOT / AutoPILOT-only additions: needed to run the GUI
+      # (embedded kernel, console, plotting) and/or the AutoPILOT chat dock,
+      # but NOT present in environment_2024_1.yml.
+      # =====================================================================
+
+      # --- Qt console (embedded kernel UI) ---------------------------------
+      - qtconsole==5.7.2
+      - QtPy==2.4.3
+
+      # --- Jupyter kernel / messaging (embedded kernel, client, recorder) --
+      - ipykernel==7.3.0
+      - jupyter-client==8.9.1
+      - pyzmq==27.1.0
+      - traitlets==5.15.1
+
+      # --- plotting / data viewer ------------------------------------------
+      - matplotlib==3.11.0
+
+      # --- Bluesky ecosystem extras not in environment_2024_1.yml ----------
+      - bluesky-tiled-plugins==2.0.8
+      - event-model==1.24.0
+      - intake==0.6.4
+      - caproto==1.3.0
+
+      # --- scientific / data extras -----------------------------------------
+      - numpy==2.3.5
+      - scipy==1.17.1
+      - tifffile==2026.3.3
+      - toolz==1.1.0
+      - PyYAML==6.0.3
+
+      # --- APS / MPE instrument utilities extras ----------------------------
       - xraydb==4.5.8
       - GitPython==3.1.45
+
+      # --- AutoPILOT chat dock (optional; gui_qt/autopilot_bridge.py
+      # --- degrades gracefully if this isn't installed) --------------------
+      - anthropic==0.118.0
