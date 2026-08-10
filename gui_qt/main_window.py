@@ -37,7 +37,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         """Build the toolbar + split layout and wire the console lifecycle."""
         super().__init__()
-        self.setWindowTitle("MPE Bluesky Plan Runner (Qt)")
+        self.setWindowTitle("B-PILOT")
         self.resize(S.px(1500), S.px(900))
         self.setMinimumSize(S.px(980), S.px(600))
         # AutoPILOT is the only dock widget, but nesting still widens Qt's own
