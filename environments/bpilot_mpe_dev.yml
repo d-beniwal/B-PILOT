@@ -52,19 +52,29 @@ dependencies:
   - hklpy >=1.0.3
   - aps-dm-api >=5
 
+  # --- Qt bindings (conda, not pip) ------------------------------------------
+  # Must come from conda-forge, matching environment_2024_1.yml's `pyqt =5`/
+  # `qt =5` exactly, NOT pip's PyQt5/PyQt5-Qt5 wheels. The pip wheels bundle
+  # their own Qt5 libs but dlopen xcb-side system libraries (e.g.
+  # libxcb-cursor.so.0, required since PyQt5-Qt5 5.15.9+) at runtime instead
+  # of vendoring them; on redwood this produced
+  # `qt.qpa.plugin: Could not load the Qt platform plugin "xcb" ... even
+  # though it was found` (plugin file present, but its own dependency chain
+  # unresolved against the OS). conda-forge's qt/pyqt build vendors a
+  # self-consistent set of libxcb/xcb-util-cursor/libxkbcommon-x11 inside the
+  # env, which is why `bluesky_2024_2` (conda pyqt/qt) launches fine while an
+  # earlier pip-pinned version of this env did not. Confirmed 2026-08-10.
+  - pyqt =5
+  - qt =5
+
   - pip:
       # =====================================================================
       # SECTION 1 — overlaps with environment_2024_1.yml (the shared team's
       # baseline bluesky_2024_1 conda env). Pip-pinned here for an exactly
       # reproducible GUI-process solve; a couple of names differ from the
-      # conda package (PyQt5* ~= conda `pyqt =5`/`qt =5`, pyepics ~= conda
-      # `pyEpics`).
+      # conda package (pyepics ~= conda `pyEpics`). Qt bindings are conda,
+      # not pip — see the `pyqt =5`/`qt =5` entries above.
       # =====================================================================
-
-      # --- Qt bindings (~= conda pyqt=5 / qt=5) ----------------------------
-      - PyQt5==5.15.11
-      - PyQt5-Qt5==5.15.19
-      - PyQt5-sip==12.18.0
 
       - ipython==9.15.0
 
