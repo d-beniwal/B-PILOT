@@ -26,6 +26,7 @@ from PyQt5 import QtWidgets
 
 from . import command_builder
 from . import config
+from . import midas_bridge
 from . import param_form
 from . import plan_parser as P
 from . import style as S
@@ -83,6 +84,9 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._skeleton: tuple[str, bool] | None = None
         self._motor_rows_widget: MotorRowsWidget | None = None
         self._both_minimized_last = False
+        # area_detector device name(s) bound in the most recently *composed*
+        # (not hand-edited) command -- see _compose_lines / midas_bridge.py.
+        self._last_area_detectors: list = []
 
         self._build_ui()
         self._populate_file_browser()
@@ -755,6 +759,9 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         values, errors = self._parse_params()
         if errors:
             return None, None
+        self._last_area_detectors = midas_bridge.area_detector_devices(
+            self._current_params, values
+        )
         notes = self._notes.toPlainText().strip()
         return (
             self._make_import_line(plan_name),
@@ -793,12 +800,22 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         """The text to send/copy: the hand-edited box verbatim while editing,
         else the form-composed two-line command."""
         if self._editing:
+            # No reliable ParamSpec/value snapshot exists for hand-edited text
+            # -- don't trigger the MIDAS bridge off a stale composed value.
+            self._last_area_detectors = []
             text = self._cmd_display.toPlainText().strip()
             return text or None
         import_line, re_line = self._compose_lines()
         if not re_line:
             return None
         return f"{import_line}\n{re_line}"
+
+    def last_dispatch_area_detector_devices(self) -> list:
+        """area_detector device name(s) bound in the command last produced by
+        `_command_text()` -- `[]` for a hand-edited command or one with no
+        such param. Used by main_window to trigger the MIDAS_GUI live-view
+        bridge only for dispatches that actually came from this panel."""
+        return self._last_area_detectors
 
     def _copy_command(self) -> None:
         text = self._command_text()

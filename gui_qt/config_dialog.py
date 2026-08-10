@@ -993,6 +993,19 @@ class ConfigDialog(QtWidgets.QDialog):
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {S.MUTED};")
         card.body.addWidget(note)
+
+        self._midas_bridge_enabled = QtWidgets.QCheckBox(
+            "Auto-start MIDAS_GUI live view when a detector plan runs"
+        )
+        self._midas_bridge_enabled.setToolTip(
+            "When a Run/Queue dispatch includes an area-detector device, send "
+            "its EPICS prefix to a locally-running MIDAS_GUI so its Data "
+            "Viewer auto-starts Live Data on that detector's PVA channel — "
+            "zero clicks in MIDAS_GUI. No-op if MIDAS_GUI isn't running; "
+            "never launches it. Off by default; takes effect immediately on "
+            "Save, no restart needed."
+        )
+        card.body.addWidget(self._midas_bridge_enabled)
         return card
 
     # ── Appearance (display scale) ───────────────────────────────────────────────
@@ -1161,6 +1174,7 @@ class ConfigDialog(QtWidgets.QDialog):
         self._databroker_catalog.setText(cfg.get("databroker_catalog") or "")
         self._databroker_uri.setText(cfg.get("databroker_uri") or "")
         self._databroker_nexus_dir.setText(cfg.get("databroker_nexus_dir") or "")
+        self._midas_bridge_enabled.setChecked(bool(cfg.get("midas_bridge_enabled", False)))
 
     def values(self) -> dict:
         """Return the edited settings (all tabs) as a config dict."""
@@ -1203,6 +1217,7 @@ class ConfigDialog(QtWidgets.QDialog):
             "databroker_catalog": self._databroker_catalog.text().strip(),
             "databroker_uri": self._databroker_uri.text().strip(),
             "databroker_nexus_dir": self._databroker_nexus_dir.text().strip(),
+            "midas_bridge_enabled": self._midas_bridge_enabled.isChecked(),
         }
 
     def accept(self) -> None:  # noqa: D102

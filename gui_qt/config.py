@@ -101,6 +101,11 @@ DEFAULTS: dict = {
     # from Configuration -> Appearance. Has no effect if AutoPILOT/ isn't
     # present or its deps aren't installed (autopilot_bridge.AVAILABLE).
     "autopilot_enabled": False,
+    # Auto-start MIDAS_GUI's live view when a Run/Queue dispatch involves an
+    # area_detector device (see gui_qt/midas_bridge.py). Off by default -- a
+    # no-op if MIDAS_GUI isn't running; never auto-launches it. Toggled from
+    # Configuration -> Data Viewer.
+    "midas_bridge_enabled": False,
     # Devices (see device_discovery.py / device_source.py):
     "device_search_paths": [],   # directories scanned for __all__-exported devices
     # {category: {device_name: shown_bool}}; unseen names default shown.

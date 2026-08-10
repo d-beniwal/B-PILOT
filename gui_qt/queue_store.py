@@ -114,8 +114,21 @@ def _default_name(command: str) -> str:
     return line if len(line) <= 60 else line[:59] + "…"
 
 
-def add(beamline: str, command: str, notes: str = "", name: str = "") -> dict:
-    """Append a waiting item; returns the new queue."""
+def add(
+    beamline: str,
+    command: str,
+    notes: str = "",
+    name: str = "",
+    area_detectors: list | None = None,
+) -> dict:
+    """Append a waiting item; returns the new queue.
+
+    `area_detectors` (device names bound to an area_detector-category plan
+    param, if any) lets queue_runner.py trigger the MIDAS_GUI live-view
+    bridge when this item is dispatched — purely additive; items loaded
+    from an older queue file simply have `[]` here (see `.get(..., [])`
+    at every read site).
+    """
     def _fn(d: dict) -> None:
         d["seq"] = int(d.get("seq", 0)) + 1
         d["items"].append({
@@ -124,6 +137,7 @@ def add(beamline: str, command: str, notes: str = "", name: str = "") -> dict:
             "command": command,
             "notes": notes,
             "status": WAITING,
+            "midas_area_detectors": area_detectors or [],
         })
     return mutate(beamline, _fn)
 

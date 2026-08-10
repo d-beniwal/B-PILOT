@@ -10,6 +10,7 @@ from PyQt5 import QtWidgets
 from . import autopilot_bridge
 from . import config
 from . import device_source
+from . import midas_bridge
 from . import paths
 from . import style as S
 from .console_panel import ConsolePanel
@@ -321,6 +322,15 @@ class MainWindow(QtWidgets.QMainWindow):
         It is still passed through here for status-line/logging purposes.
         """
         self.console.run_code(command)
+        # Only trigger the MIDAS_GUI live-view bridge for dispatches that
+        # came from the plan-form panel itself, not the SwitchTo popup
+        # (out of scope for v1 — see gui_qt/midas_bridge.py's plan notes).
+        if self.sender() is self.runner:
+            midas_bridge.notify_interactive(
+                self.console,
+                self.runner.last_dispatch_area_detector_devices(),
+                config.get("midas_bridge_enabled"),
+            )
 
     def _on_queue(self, command: str, notes: str) -> None:
         """Append a plan to the queue (the scheduler dispatches it in turn).
@@ -330,7 +340,11 @@ class MainWindow(QtWidgets.QMainWindow):
         document happens via the ``md={'notes': ...}`` already embedded in
         `command` (see `plan_runner._make_re_line`).
         """
-        self.queue.add(command, notes)
+        area_detectors = (
+            self.runner.last_dispatch_area_detector_devices()
+            if self.sender() is self.runner else []
+        )
+        self.queue.add(command, notes, area_detectors=area_detectors)
 
     # ── Menu ──────────────────────────────────────────────────────────────────
 

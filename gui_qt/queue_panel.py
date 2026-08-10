@@ -126,9 +126,14 @@ class QueuePanel(QtWidgets.QWidget):
 
     # ── Public: add to queue ─────────────────────────────────────────────────────
 
-    def add(self, command: str, notes: str = "") -> None:
-        """Append a plan command to the persistent queue."""
-        qs.add(self._beamline(), command, notes)
+    def add(self, command: str, notes: str = "", area_detectors: list | None = None) -> None:
+        """Append a plan command to the persistent queue.
+
+        `area_detectors` (device names bound to an area_detector-category
+        param, if any) is stored so queue_runner.py can trigger the
+        MIDAS_GUI live-view bridge when this item is dispatched.
+        """
+        qs.add(self._beamline(), command, notes, area_detectors=area_detectors or [])
         self._refresh()
 
     # ── Helpers ───────────────────────────────────────────────────────────────────

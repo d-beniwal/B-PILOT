@@ -13,7 +13,10 @@ status updates **independently of the GUI** (even while it is detached/closed).
   ``RunEngineInterrupted`` surfaces as an errored reply).
 * Exits when the kernel dies.
 
-No Qt.  Run: ``python -m gui_qt.queue_runner [<beamline>]``.
+No Qt, with one narrow exception: a `QCoreApplication` instance (no event
+loop entered) is created so `midas_bridge`'s `QLocalSocket` blocking calls
+work when a queued item has an area_detector device and the MIDAS_GUI
+bridge is enabled.  Run: ``python -m gui_qt.queue_runner [<beamline>]``.
 """
 from __future__ import annotations
 
@@ -28,6 +31,7 @@ except ImportError:
 
 from . import config
 from . import kernel_session as ks
+from . import midas_bridge
 from . import queue_store as qs
 
 
@@ -68,6 +72,16 @@ def main(argv: list[str]) -> int:
     if lock is None:
         return 0  # another runner is already active
 
+    # QLocalSocket's blocking waitFor*() calls (midas_bridge._send_live_pv)
+    # need a QCoreApplication instance to exist — no event loop is entered,
+    # this process otherwise stays plain-Python/no-Qt as documented above.
+    # Must be kept alive (bound to a name) for the life of main(): an
+    # unassigned QCoreApplication(...) has no Python reference anywhere and
+    # gets garbage-collected immediately, tearing down the app's socket-
+    # notifier machinery right after it's created.
+    from PyQt5 import QtCore
+    _qt_app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication(sys.argv)
+
     cf = ks.connection_file(beamline)
     try:
         from jupyter_client import BlockingKernelClient
@@ -95,6 +109,11 @@ def main(argv: list[str]) -> int:
                 )
                 if nxt is not None:
                     qs.set_item_status(beamline, nxt["id"], qs.RUNNING)
+                    midas_bridge.notify_queued_sync(
+                        kc,
+                        nxt.get("midas_area_detectors") or [],
+                        config.get("midas_bridge_enabled"),
+                    )
                     try:
                         msg_id = kc.execute(
                             nxt["command"], silent=False, store_history=True
