@@ -30,6 +30,7 @@ except ImportError:
     fcntl = None
 
 from . import config
+from . import det_startup_state
 from . import kernel_session as ks
 from . import midas_bridge
 from . import queue_store as qs
@@ -109,14 +110,21 @@ def main(argv: list[str]) -> int:
                 )
                 if nxt is not None:
                     qs.set_item_status(beamline, nxt["id"], qs.RUNNING)
+                    detectors = nxt.get("midas_area_detectors") or []
                     midas_bridge.notify_queued_sync(
                         kc,
-                        nxt.get("midas_area_detectors") or [],
+                        detectors,
                         config.get("midas_bridge_enabled"),
+                    )
+                    startup = det_startup_state.build_startup_commands(
+                        beamline, detectors
+                    )
+                    command = (
+                        f"{startup}\n{nxt['command']}" if startup else nxt["command"]
                     )
                     try:
                         msg_id = kc.execute(
-                            nxt["command"], silent=False, store_history=True
+                            command, silent=False, store_history=True
                         )
                     except Exception:  # noqa: BLE001
                         qs.set_item_status(beamline, nxt["id"], qs.ERROR)

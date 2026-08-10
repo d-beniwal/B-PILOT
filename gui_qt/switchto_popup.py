@@ -23,6 +23,7 @@ from PyQt5 import QtWidgets
 
 from . import command_builder
 from . import config
+from . import midas_bridge
 from . import param_form
 from . import paths as _paths
 from . import plan_parser as P
@@ -95,6 +96,7 @@ class SwitchToButton(QtWidgets.QPushButton):
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.clicked.connect(self._open_popup)
         self.setEnabled(False)
+        self._last_area_detectors: list = []
 
     def set_console_ready(self, ready: bool) -> None:
         self.setEnabled(ready)
@@ -107,12 +109,24 @@ class SwitchToButton(QtWidgets.QPushButton):
         if m:
             self.setText(f"Mode:\n{m.group(1)}")
 
+    def last_dispatch_area_detector_devices(self) -> list:
+        """area_detector device name(s) bound in the command last produced by
+        the popup -- mirrors PlanRunnerPanel's own accessor of the same name,
+        so `MainWindow` can treat both senders uniformly."""
+        return self._last_area_detectors
+
     def _open_popup(self) -> None:
         popup = SwitchToPopup(self._console, parent=self)
-        popup.runRequested.connect(self.runRequested.emit)
-        popup.queueRequested.connect(self.queueRequested.emit)
+        popup.runRequested.connect(lambda cmd, notes, p=popup: self._forward(p, self.runRequested, cmd, notes))
+        popup.queueRequested.connect(lambda cmd, notes, p=popup: self._forward(p, self.queueRequested, cmd, notes))
         popup.move(S.clamp_popup_to_window(self, popup))
         popup.show()
+
+    def _forward(self, popup: "SwitchToPopup", signal, command: str, notes: str) -> None:
+        # Stash the popup's detector list before it closes (and is destroyed)
+        # so MainWindow can read it off `self` once this signal reaches it.
+        self._last_area_detectors = popup.last_dispatch_area_detector_devices()
+        signal.emit(command, notes)
 
 
 class SwitchToPopup(QtWidgets.QFrame):
@@ -131,6 +145,7 @@ class SwitchToPopup(QtWidgets.QFrame):
         self._shortcuts = discover_shortcuts()
         self._current_params: list = []
         self._param_widgets: dict = {}
+        self._last_area_detectors: list = []
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setStyleSheet(
             f"QFrame{{background:{S.PANEL};border:1px solid {S.BORDER};"
@@ -238,11 +253,20 @@ class SwitchToPopup(QtWidgets.QFrame):
         values, errors = param_form.parse_values(self._current_params, self._param_widgets)
         if errors:
             return None
+        self._last_area_detectors = midas_bridge.area_detector_devices(
+            self._current_params, values
+        )
         spec, module = entry
         notes = self._notes.text().strip()
         import_line = command_builder.make_import_line(name, module)
         re_line = command_builder.make_re_line(name, self._current_params, values, notes)
         return f"{import_line}\n{re_line}"
+
+    def last_dispatch_area_detector_devices(self) -> list:
+        """area_detector device name(s) bound in the command last produced by
+        `_command_text()` -- mirrors PlanRunnerPanel's own accessor of the
+        same name."""
+        return self._last_area_detectors
 
     def _run_command(self) -> None:
         text = self._command_text()

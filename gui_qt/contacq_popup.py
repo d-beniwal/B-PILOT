@@ -19,7 +19,9 @@ from PyQt5 import QtWidgets
 
 from . import command_builder
 from . import config
+from . import det_startup_state
 from . import device_source
+from . import midas_bridge
 from . import param_form
 from . import plan_parser as P
 from . import style as S
@@ -219,7 +221,12 @@ class ContAcqPopup(QtWidgets.QFrame):
             return
         import_line = command_builder.make_import_line("cont_acq", spec["module"])
         re_line = command_builder.make_re_line("cont_acq", self._params, values)
-        self._console.run_code(f"{import_line}\n{re_line}")
+        detectors = midas_bridge.area_detector_devices(self._params, values)
+        startup = det_startup_state.build_startup_commands(
+            config.get("beamline"), detectors
+        )
+        lines = f"{startup}\n{import_line}\n{re_line}" if startup else f"{import_line}\n{re_line}"
+        self._console.run_code(lines)
         self.close()
 
     def _stop(self, det_name: str) -> None:

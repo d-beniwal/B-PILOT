@@ -9,6 +9,7 @@ from PyQt5 import QtWidgets
 
 from . import autopilot_bridge
 from . import config
+from . import det_startup_state
 from . import device_source
 from . import midas_bridge
 from . import paths
@@ -331,6 +332,15 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self._contacq_btn, 1)
         return bar
 
+    def _sender_area_detectors(self) -> list:
+        """area_detector device name(s) for whichever panel (form or
+        SwitchTo) just emitted runRequested/queueRequested -- both expose
+        the same `last_dispatch_area_detector_devices()` accessor."""
+        sender = self.sender()
+        if sender in (self.runner, self._mode_btn):
+            return sender.last_dispatch_area_detector_devices()
+        return []
+
     def _on_run(self, command: str, notes: str) -> None:
         """Run the command in the console.
 
@@ -339,14 +349,18 @@ class MainWindow(QtWidgets.QMainWindow):
         lands in the run's start document (``cat[uid].metadata["start"]``).
         It is still passed through here for status-line/logging purposes.
         """
-        self.console.run_code(command)
+        detectors = self._sender_area_detectors()
+        startup = det_startup_state.build_startup_commands(
+            config.get("beamline"), detectors
+        )
+        self.console.run_code(f"{startup}\n{command}" if startup else command)
         # Only trigger the MIDAS_GUI live-view bridge for dispatches that
         # came from the plan-form panel itself, not the SwitchTo popup
         # (out of scope for v1 — see gui_qt/midas_bridge.py's plan notes).
         if self.sender() is self.runner:
             midas_bridge.notify_interactive(
                 self.console,
-                self.runner.last_dispatch_area_detector_devices(),
+                detectors,
                 config.get("midas_bridge_enabled"),
             )
 
@@ -357,11 +371,14 @@ class MainWindow(QtWidgets.QMainWindow):
         tooltip display only — the actual attachment to the run's start
         document happens via the ``md={'notes': ...}`` already embedded in
         `command` (see `plan_runner._make_re_line`).
+
+        Any needed `det_startup` is injected later, by `queue_runner.py`
+        right before it actually dispatches this item — not here, since the
+        item may sit queued for a while and the kernel's real state (or
+        what's already been started by something else) could change before
+        it runs.
         """
-        area_detectors = (
-            self.runner.last_dispatch_area_detector_devices()
-            if self.sender() is self.runner else []
-        )
+        area_detectors = self._sender_area_detectors()
         self.queue.add(command, notes, area_detectors=area_detectors)
 
     # ── Menu ──────────────────────────────────────────────────────────────────

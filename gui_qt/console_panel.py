@@ -36,6 +36,7 @@ from qtconsole.manager import QtKernelManager  # noqa: E402
 from qtconsole.rich_jupyter_widget import RichJupyterWidget  # noqa: E402
 
 from . import config  # noqa: E402
+from . import det_startup_state  # noqa: E402
 from . import kernel_session as ks  # noqa: E402
 from . import paths  # noqa: E402
 from . import style as S  # noqa: E402
@@ -155,6 +156,8 @@ class ConsolePanel(QtWidgets.QWidget):
 
         cf = info["connection_file"]
         self._attached = False
+        # Fresh kernel: nothing has been through det_startup yet.
+        det_startup_state.clear(beamline)
         # Start the detached transcript recorder so the full session is captured
         # from the first line (survives GUI restarts; readable while busy).
         self._log_file = info.get("log") or self._log_path_for(cf)
@@ -193,6 +196,11 @@ class ConsolePanel(QtWidgets.QWidget):
 
         self._proc = None       # we did not spawn this one
         self._attached = True
+        # Reattaching to a kernel B-PILOT didn't just launch: we have no
+        # reliable record of what's already been started up in it, so treat
+        # every detector as unstarted (worst case: one harmless redundant
+        # det_startup call, since it's idempotent).
+        det_startup_state.clear(config.get("beamline"))
         # Reuse the transcript for this kernel; if there is none yet (e.g. a
         # kernel not started by our GUI), begin recording from now on.
         self._log_file = self._log_path_for(cf)
