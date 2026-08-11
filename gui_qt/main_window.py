@@ -641,10 +641,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _start_experiment_probe(self) -> None:
         """Poll the attached kernel for DM_EXP until it resolves, then stop.
 
-        `instrument.devices.global_variables` (which defines ``DM_EXP``) is
-        only importable once Bluesky is loaded in that kernel — which may not
-        have happened yet at attach time — so this retries rather than giving
-        up after one failed query.
+        ``DM_EXP`` (defined in `instrument.devices.global_variables`) is only
+        bound in the kernel namespace once Bluesky is loaded there — which
+        may not have happened yet at attach time — so this retries rather
+        than giving up after one failed query.
         """
         if getattr(self, "_exp_probe_timer", None) is None:
             self._exp_probe_timer = QtCore.QTimer(self)
@@ -658,8 +658,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._exp_probe_inflight or not self.console.is_running():
             return
         self._exp_probe_inflight = True
+        # Bare name, not a dotted `instrument.devices.global_variables.DM_EXP`
+        # path: the kernel loads Bluesky via `from instrument.collection
+        # import *`, which star-imports DM_EXP into the namespace but never
+        # binds the `instrument` package name itself — the dotted form always
+        # raised NameError, silently degrading to None on every poll.
         self.console.query_values(
-            {"__dm_exp__": "instrument.devices.global_variables.DM_EXP"},
+            {"__dm_exp__": "DM_EXP"},
             self._on_experiment_probed,
         )
 
