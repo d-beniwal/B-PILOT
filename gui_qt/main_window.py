@@ -11,6 +11,7 @@ from . import autopilot_bridge
 from . import config
 from . import det_startup_state
 from . import device_source
+from . import kernel_session as ks
 from . import midas_bridge
 from . import paths
 from . import style as S
@@ -34,10 +35,18 @@ _DEFAULT_LAUNCH_DIR = paths.PROJECT_ROOT
 class MainWindow(QtWidgets.QMainWindow):
     """QMainWindow hosting the plan runner, the embedded console, and run notes."""
 
+    _ATTACH_TOOLTIP_IDLE = (
+        "Reconnect to a kernel left running by a previous GUI session "
+        "(Console → Attach to running kernel…)."
+    )
+    _ATTACH_TOOLTIP_FOUND = (
+        "A Bluesky kernel is already running for this beamline — click to attach."
+    )
+
     def __init__(self) -> None:
         """Build the toolbar + split layout and wire the console lifecycle."""
         super().__init__()
-        self.setWindowTitle("B-PILOT")
+        self.setWindowTitle("B-PILOT: Bluesky - Plan Interface for Launch, Operation & Tracking")
         self.resize(S.px(1500), S.px(900))
         self.setMinimumSize(S.px(980), S.px(600))
         # AutoPILOT is the only dock widget, but nesting still widens Qt's own
@@ -135,6 +144,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(
             "Pick a Launch mode → Launch IPython → Load Bluesky, then Run plans."
         )
+        QtCore.QTimer.singleShot(0, self._refresh_attach_availability)
 
     # ── Toolbar ───────────────────────────────────────────────────────────────
 
@@ -184,10 +194,7 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self._launch_btn)
 
         self._attach_btn = QtWidgets.QPushButton("Attach")
-        self._attach_btn.setToolTip(
-            "Reconnect to a kernel left running by a previous GUI session "
-            "(Console → Attach to running kernel…)."
-        )
+        self._attach_btn.setToolTip(self._ATTACH_TOOLTIP_IDLE)
         self._attach_btn.clicked.connect(self._attach_console)
         lay.addWidget(self._attach_btn)
 
@@ -257,6 +264,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._midas_bridge_checkbox.setChecked(bool(config.get("midas_bridge_enabled")))
         self._midas_bridge_checkbox.blockSignals(False)
         self._set_toolbar_status(notify)
+        QtCore.QTimer.singleShot(0, self._refresh_attach_availability)
 
     def _on_profile_switcher_changed(self, name: str) -> None:
         if not name or name == config.active_profile():
@@ -729,6 +737,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mode_buttons.set_console_ready(False)
         self.session_log.stop()   # kernel gone — stop polling (keep text visible)
         self._clear_experiment_banner()
+        QtCore.QTimer.singleShot(0, self._refresh_attach_availability)
+
+    def _refresh_attach_availability(self) -> None:
+        """Color Attach green when a kernel is already live for the current
+        beamline. Checked once per relevant event (startup, profile change,
+        console-idle) -- see call sites -- never as a background poll.
+
+        Guarded against firing while connected: none of the call sites can
+        run while a console is up (profile switch is locked; __init__
+        predates any console; reset-console-ui means idle by definition),
+        but the is_running() check is kept here too as defense in depth.
+        """
+        if self.console.is_running():
+            return
+        cf = self.console.default_connection_file()
+        if ks.is_alive(cf):
+            self._attach_btn.setStyleSheet(S.status_button_qss(S.SUCCESS))
+            self._attach_btn.setToolTip(self._ATTACH_TOOLTIP_FOUND)
+        else:
+            self._attach_btn.setStyleSheet("")
+            self._attach_btn.setToolTip(self._ATTACH_TOOLTIP_IDLE)
 
     def _set_experiment_banner(self, value: str, *, confirmed: bool) -> None:
         """Show "Experiment:\\n<value>" in a bold banner above the console tabs.

@@ -43,21 +43,6 @@ def _discover_cont_acq() -> dict[str, dict]:
     return found
 
 
-def _button_qss(bg: str) -> str:
-    border = S.darken(bg, 130)
-    hover = S.lighten(bg, 112)
-    pressed = S.darken(bg, 112)
-    return (
-        f"QPushButton{{background:{bg};color:white;font-weight:bold;"
-        f"border:{S.px(1)}px solid {border};border-radius:{S.px(6)}px;"
-        f"padding:{S.px(5)}px {S.px(12)}px;}}"
-        f"QPushButton:hover{{background:{hover};border-color:{border};}}"
-        f"QPushButton:pressed{{background:{pressed};}}"
-        f"QPushButton:disabled{{background:{S.BUTTON_DISABLED_BG};"
-        f"color:{S.DISABLED_TEXT};border-color:{S.BUTTON_DISABLED_BORDER};}}"
-    )
-
-
 class ContAcqButton(QtWidgets.QPushButton):
     """Persistent 2-line "Cont. Aq.:\\n<detectors or —>" status button."""
 
@@ -66,7 +51,7 @@ class ContAcqButton(QtWidgets.QPushButton):
         self._console = console
         self._running: list[str] = []
         self._poll_inflight = False
-        self.setStyleSheet(_button_qss(S.MUTED))
+        self.setStyleSheet(S.status_button_qss(S.MUTED))
         self.setToolTip(
             "Click to start/stop continuous acquisition.\n"
             "Green = acquiring (one line per detector), gray = none running."
@@ -123,10 +108,10 @@ class ContAcqButton(QtWidgets.QPushButton):
         self._running = running
         if running:
             self.setText("Cont. Aq.:\n" + "\n".join(running))
-            self.setStyleSheet(_button_qss(S.CMD_RE))
+            self.setStyleSheet(S.status_button_qss(S.CMD_RE))
         else:
             self.setText("Cont. Aq.:\n—")
-            self.setStyleSheet(_button_qss(S.MUTED))
+            self.setStyleSheet(S.status_button_qss(S.MUTED))
 
     # ── Popup ─────────────────────────────────────────────────────────────────
 

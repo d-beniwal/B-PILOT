@@ -623,6 +623,24 @@ def primary_btn(text: str) -> QtWidgets.QPushButton:
     return b
 
 
+def status_button_qss(bg: str) -> str:
+    """QSS for a QPushButton whose background is a solid status color, with
+    matching hover/pressed states and the standard disabled look. Shared by
+    ContAcqButton and the toolbar Attach button."""
+    border = darken(bg, 130)
+    hover = lighten(bg, 112)
+    pressed = darken(bg, 112)
+    return (
+        f"QPushButton{{background:{bg};color:white;font-weight:bold;"
+        f"border:{px(1)}px solid {border};border-radius:{px(6)}px;"
+        f"padding:{px(5)}px {px(12)}px;}}"
+        f"QPushButton:hover{{background:{hover};border-color:{border};}}"
+        f"QPushButton:pressed{{background:{pressed};}}"
+        f"QPushButton:disabled{{background:{BUTTON_DISABLED_BG};"
+        f"color:{DISABLED_TEXT};border-color:{BUTTON_DISABLED_BORDER};}}"
+    )
+
+
 class _GripHandle(QtWidgets.QSplitterHandle):
     """Splitter handle that paints a small 3-dot grip so it reads as
     draggable instead of blending into the adjacent card border."""
