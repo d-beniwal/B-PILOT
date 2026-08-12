@@ -25,7 +25,11 @@ Three dtypes need more than a plain scalar/array JSON type:
   ``<name>_axis`` (or ``<name>_axes`` for device_list) field lets the model
   supply the axis when the chosen motor has more than one. Mirrors
   gui_qt/skeleton_widgets.py's `MotorAxisPicker` three-way logic (0 axes:
-  bare name; 1 axis: auto-resolve; >1: axis required).
+  bare name; 1 axis: auto-resolve; >1: axis required). Exception:
+  ``device{motor:whole}`` (``spec.motor_whole``) means the plan wants the
+  bare multi-axis device itself (it indexes sub-axes internally) -- no
+  ``<name>_axis`` field is offered and the device name passes straight
+  through, unresolved.
 * ``axes`` -- only present when `template.skeleton` is set (the six
   scan_skeletons.py plans, whose motor(s)/position(s) are a bare `*args`
   that never becomes a ParamSpec at all -- see gui_qt/plan_parser.py's
@@ -99,7 +103,9 @@ def build_tool_schema(template: Template, catalog: DeviceCatalog, blocks: dict) 
             if spec.required:
                 required.append(spec.name)
             if spec.category == "motor":
-                if spec.dtype == "device":
+                if spec.dtype == "device" and spec.motor_whole:
+                    pass  # device{motor:whole} -- whole device wanted, no axis field
+                elif spec.dtype == "device":
                     properties[f"{spec.name}_axis"] = {"type": "string", "description": _MOTOR_AXIS_DESCRIPTION}
                 else:
                     properties[f"{spec.name}_axes"] = {
@@ -296,6 +302,11 @@ def validate(template: Template, raw: dict, catalog: DeviceCatalog, blocks: dict
                 continue
             if value not in catalog.names_for(spec.category):
                 errors.append(f"{spec.name}: {value!r} is not a known {spec.category} device")
+                continue
+            if spec.motor_whole:
+                # device{motor:whole} -- the plan wants the bare device, never
+                # a resolved axis; skip _resolve_motor_token entirely.
+                clean[spec.name] = value
                 continue
             token = _resolve_motor_token(spec.name, value, raw.get(f"{spec.name}_axis"), catalog, errors)
             if token is not None:

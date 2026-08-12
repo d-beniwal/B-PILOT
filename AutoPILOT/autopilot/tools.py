@@ -12,9 +12,14 @@ look up a real recorded run instead of confidently guessing when it isn't sure.
 """
 from __future__ import annotations
 
+import fnmatch
+import itertools
+import os
+import re
 from pathlib import Path
 
 from . import data_catalog
+from . import settings as autopilot_settings
 from .device_catalog import DeviceCatalog
 from .plan_catalog import PlanInfo
 from .plan_context import TEMPLATES
@@ -35,6 +40,9 @@ VALIDATE_DOCSTRING_TOOL_NAME = "validate_docstring"
 SEARCH_RUNS_TOOL_NAME = "search_runs"
 DESCRIBE_RUN_TOOL_NAME = "describe_run"
 READ_RUN_DATA_TOOL_NAME = "read_run_data"
+LIST_DIRECTORY_TOOL_NAME = "list_directory"
+SEARCH_CODEBASE_TOOL_NAME = "search_codebase"
+READ_SOURCE_FILE_TOOL_NAME = "read_source_file"
 
 
 def build_list_devices_schema() -> dict:
@@ -442,3 +450,311 @@ def describe_run(profile: str | None, run_id: str) -> dict:
 
 def read_run_data(profile: str | None, run_id: str, stream: str = "primary", columns: list | None = None) -> dict:
     return data_catalog.read_run_data(profile, run_id, stream=stream, columns=columns)
+
+
+# ---------------------------------------------------------------------------
+# General project-wide knowledge tools: list_directory / search_codebase /
+# read_source_file. Scoped to the whole mpe_bluesky checkout
+# (bpilot_paths.PROJECT_ROOT), not just instrument/plans/ like read_plan_file
+# above -- these exist so AutoPILOT can answer free-form questions about
+# anything in the project (GUI widgets, docs, plan internals) instead of only
+# the narrow slices the structured tools above cover.
+# ---------------------------------------------------------------------------
+
+_TEXT_EXTENSIONS = {
+    ".py", ".md", ".txt", ".yml", ".yaml", ".json", ".cfg", ".ini", ".toml", ".sh", ".rst",
+}
+
+# Directories never listed, searched, or read into.
+_EXCLUDED_DIR_NAMES = {
+    ".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", ".pytest_cache",
+    ".idea", ".vscode", "dist", "build",
+    # Gitignored raw experiment-data dump (uids, plan args, instrument config) --
+    # real run data, not codebase/GUI documentation; search_runs/describe_run/
+    # read_run_data above already cover actual run-data questions.
+    "hexm_export",
+}
+_EXCLUDED_DIR_SUFFIXES = (".egg-info",)
+
+# Exact files never listed, searched, or read, beyond the extension/dir filters
+# above -- resolved once at import time.
+_DENIED_PATHS = {
+    Path(bpilot_paths.ICONFIG).resolve(),  # live plaintext MongoDB credentials
+    autopilot_settings.SETTINGS_PATH.resolve(),  # may hold a plaintext Argo API key override
+}
+
+# Filename patterns denylisted anywhere in the tree, defense-in-depth against
+# a future secret file that isn't one of the two known ones above.
+_DENIED_NAME_PATTERNS = ("*.env", "*secret*", "*credential*", "*password*", "id_rsa*", "*.pem", "*.key")
+
+# Redacts credentialed connection strings (e.g. "mongodb://user:pass@host") from
+# any line before it leaves search_codebase/read_source_file -- a couple of real
+# plan files under instrument/plans/ hardcode live Mongo credentials as source
+# text, which no path/filename denylist above would catch (ordinary .py names).
+_CREDENTIAL_URL_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/:@]+:[^\s/:@]+@")
+
+
+def _redact(text: str) -> str:
+    return _CREDENTIAL_URL_RE.sub(r"\1***:***@", text)
+
+
+def _is_denied_name(name: str) -> bool:
+    return any(fnmatch.fnmatch(name.lower(), pat) for pat in _DENIED_NAME_PATTERNS)
+
+
+def _resolve_project_path(path: str | None) -> Path | None:
+    """Resolve `path` against PROJECT_ROOT, refusing anything outside it, any
+    denylisted file, or anything matching a denylisted name pattern anywhere
+    along the path.
+
+    Mirrors `_resolve_plan_path` above but rooted at the whole project
+    instead of just instrument/plans/, since these tools' whole purpose is
+    project-wide knowledge -- see the module-level denylists for what stays
+    excluded regardless.
+    """
+    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    candidate = Path(path) if path else root
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    try:
+        resolved = candidate.resolve()
+        rel_parts = resolved.relative_to(root).parts
+    except (OSError, ValueError):
+        return None
+    for part in rel_parts[:-1]:
+        if part in _EXCLUDED_DIR_NAMES or part.endswith(_EXCLUDED_DIR_SUFFIXES) or _is_denied_name(part):
+            return None
+    if resolved in _DENIED_PATHS or _is_denied_name(resolved.name):
+        return None
+    return resolved
+
+
+def build_list_directory_schema() -> dict:
+    return {
+        "name": LIST_DIRECTORY_TOOL_NAME,
+        "description": (
+            "List the immediate files and subdirectories of a directory in "
+            "the mpe_bluesky project (GUI code, instrument plans, docs, "
+            "READMEs -- everything except a small denylist of sensitive "
+            "files/dirs). Use this to orient yourself before searching or "
+            "reading, e.g. to see what's inside gui_qt/ or B-PILOT/documents/."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Directory path, relative to the mpe_bluesky project root "
+                        "(e.g. 'B-PILOT/gui_qt') or absolute. Omit to list the "
+                        "project root itself."
+                    ),
+                }
+            },
+            "required": [],
+        },
+    }
+
+
+def build_search_codebase_schema() -> dict:
+    return {
+        "name": SEARCH_CODEBASE_TOOL_NAME,
+        "description": (
+            "Case-insensitive substring search over text files (.py, .md, "
+            ".json, .yml, etc.) anywhere in the mpe_bluesky project -- GUI "
+            "code, instrument plans, docs. Use this to find where something "
+            "is implemented or documented (e.g. a GUI button's name like "
+            "'BEAMMODE') before answering, instead of guessing. Returns "
+            "matching lines with file path and line number; call "
+            "read_source_file on a promising match for full context. Some "
+            "files/directories are excluded (e.g. instrument/iconfig.yml, "
+            "AutoPILOT's own settings file) and credentialed connection "
+            "strings are always redacted."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Substring to search for, case-insensitive.",
+                },
+                "path_prefix": {
+                    "type": "string",
+                    "description": "Optional subtree to restrict the search to, e.g. 'B-PILOT/gui_qt'.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max matches to return, default 40, capped at 200.",
+                },
+            },
+            "required": ["query"],
+        },
+    }
+
+
+def build_read_source_file_schema() -> dict:
+    return {
+        "name": READ_SOURCE_FILE_TOOL_NAME,
+        "description": (
+            "Read the text of one file anywhere in the mpe_bluesky project "
+            "(GUI code, instrument plans, docs, READMEs). Use this to get "
+            "full context after search_codebase points you at a promising "
+            "file -- never guess at a file's contents. Large files are "
+            "capped; use start_line/end_line to page through them. Some "
+            "files are excluded (e.g. instrument/iconfig.yml, AutoPILOT's "
+            "own settings file) and credentialed connection strings are "
+            "always redacted."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path, relative to the mpe_bluesky project root or absolute.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "1-indexed first line to return. Omit to start from the beginning.",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "1-indexed last line to return (inclusive). Omit to read to the cap.",
+                },
+            },
+            "required": ["path"],
+        },
+    }
+
+
+def list_directory(path: str | None) -> dict:
+    resolved = _resolve_project_path(path)
+    if resolved is None or not resolved.is_dir():
+        return {"error": f"'{path or '.'}' is not a listable directory in this project."}
+    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    entries = []
+    for entry in sorted(os.scandir(resolved), key=lambda e: e.name.lower()):
+        if entry.is_dir():
+            if entry.name in _EXCLUDED_DIR_NAMES or entry.name.endswith(_EXCLUDED_DIR_SUFFIXES) or _is_denied_name(entry.name):
+                continue
+            entries.append({"name": entry.name, "type": "dir"})
+        else:
+            entry_path = Path(entry.path).resolve()
+            if entry_path in _DENIED_PATHS or _is_denied_name(entry.name):
+                continue
+            entries.append({"name": entry.name, "type": "file", "size": entry.stat().st_size})
+    return {"path": str(resolved.relative_to(root)) or ".", "entries": entries}
+
+
+def _iter_text_files(start: Path, root: Path):
+    for dirpath, dirnames, filenames in os.walk(start):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIR_NAMES and not d.endswith(_EXCLUDED_DIR_SUFFIXES) and not _is_denied_name(d)
+        ]
+        for filename in filenames:
+            candidate = Path(dirpath) / filename
+            if candidate.suffix.lower() not in _TEXT_EXTENSIONS:
+                continue
+            if candidate.resolve() in _DENIED_PATHS or _is_denied_name(filename):
+                continue
+            yield candidate
+
+
+_MAX_MATCH_LINE_CHARS = 300
+_COLLECT_CAP = 5000
+
+
+def search_codebase(query: str, path_prefix: str | None, limit: int | None) -> dict:
+    if not query:
+        return {"error": "query must not be empty."}
+    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    start = _resolve_project_path(path_prefix) if path_prefix else root
+    if start is None or not start.is_dir():
+        return {"error": f"'{path_prefix}' is not a searchable directory in this project."}
+    cap = min(max(limit or 40, 1), 200)
+    query_lower = query.lower()
+    collected = []
+    collect_truncated = False
+    for file_path in _iter_text_files(start, root):
+        try:
+            lines = file_path.read_text(errors="ignore").splitlines()
+        except OSError:
+            continue
+        rel_file = str(file_path.relative_to(root))
+        for lineno, line in enumerate(lines, start=1):
+            if query_lower in line.lower():
+                text = _redact(line.strip())
+                if len(text) > _MAX_MATCH_LINE_CHARS:
+                    text = text[:_MAX_MATCH_LINE_CHARS] + "…"
+                collected.append({"file": rel_file, "line": lineno, "text": text})
+                if len(collected) >= _COLLECT_CAP:
+                    collect_truncated = True
+                    break
+        if collect_truncated:
+            break
+
+    if len(collected) <= cap:
+        return {"query": query, "matches": collected, "truncated": collect_truncated}
+
+    # More matches than the display cap: a single noisy subtree (e.g.
+    # instrument/, with dozens of hits) could otherwise starve out other
+    # subtrees (e.g. B-PILOT/) before they're ever represented. Group by
+    # top-level path component (relative to the searched subtree) and
+    # interleave round-robin so every group gets a fair share.
+    start_rel_parts = start.relative_to(root).parts
+    groups: dict[str, list] = {}
+    for match in collected:
+        file_parts = Path(match["file"]).parts
+        key_parts = file_parts[len(start_rel_parts):]
+        key = key_parts[0] if key_parts else match["file"]
+        groups.setdefault(key, []).append(match)
+    interleaved = [
+        m for group in itertools.zip_longest(*groups.values()) for m in group if m is not None
+    ]
+    return {"query": query, "matches": interleaved[:cap], "truncated": True}
+
+
+_MAX_READ_LINES = 4000
+_MAX_READ_CHARS = 150_000
+
+
+def _coerce_line_arg(value) -> int | None:
+    """Best-effort int coercion for a declared-integer tool arg -- the model
+    occasionally emits a numeric string instead. Anything non-coercible (or
+    None) is treated as unset rather than raising."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def read_source_file(path: str, start_line: int | None, end_line: int | None) -> dict:
+    resolved = _resolve_project_path(path)
+    if resolved is None or not resolved.is_file() or resolved.suffix.lower() not in _TEXT_EXTENSIONS:
+        return {"error": f"'{path}' is not a readable text file in this project."}
+    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    try:
+        lines = resolved.read_text(errors="ignore").splitlines()
+    except OSError as exc:
+        return {"error": f"Could not read '{path}': {exc}"}
+    total_lines = len(lines)
+    start_idx = max((_coerce_line_arg(start_line) or 1) - 1, 0)
+    end_idx = min(_coerce_line_arg(end_line) or total_lines, total_lines)
+    selected = lines[start_idx:end_idx]
+    truncated = False
+    if len(selected) > _MAX_READ_LINES:
+        selected = selected[:_MAX_READ_LINES]
+        truncated = True
+    text = _redact("\n".join(selected))
+    if len(text) > _MAX_READ_CHARS:
+        text = text[:_MAX_READ_CHARS]
+        truncated = True
+    return {
+        "path": str(resolved.relative_to(root)),
+        "start_line": start_idx + 1,
+        "end_line": start_idx + len(selected),
+        "total_lines": total_lines,
+        "truncated": truncated,
+        "text": text,
+    }

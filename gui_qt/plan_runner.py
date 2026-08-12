@@ -427,7 +427,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     def _apply_param_value(self, name: str, value_node: ast.expr) -> None:
         """Set `self._param_widgets[name]`'s widget from a parsed argument value."""
         spec, widget = self._param_widgets[name]
-        if spec.dtype == "device" and spec.category == "motor":
+        if spec.dtype == "device" and spec.category == "motor" and not spec.motor_whole:
             # `motor.axis` (ast.Attribute) — or a bare motor (ast.Name) for an
             # axis-less device / a hand-edited command.
             if isinstance(value_node, ast.Attribute) and isinstance(

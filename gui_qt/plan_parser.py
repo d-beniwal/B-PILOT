@@ -18,6 +18,10 @@ NumPy-style ``Parameters`` grammar so the GUI can build a form::
 
 * dtype in {str, int, float, bool, choice{a, b, ...}, positions, device{cat},
   device_list{cat}, block{cat}}
+* ``device{motor:whole}`` (category ``motor`` only): the plan wants the bare
+  multi-axis device itself, never a resolved ``motor.axis`` -- for plans that
+  index sub-axes internally (e.g. ``sms.y``). Omitting ``:whole`` is the
+  default and means "this field must resolve to exactly one axis."
 * units optional, e.g. [deg], [mm], [s], [1/deg]
 * body split on the first ' :: ' -> short label / long tooltip
 * default + required come from the signature (no default => required;
@@ -62,10 +66,15 @@ DEFAULT_PLAN_FILE = "scans_stationary_gui_testing.py"
 # device/device_list it names the device group (e.g. "area_detector",
 # "scaler"); for block it names which of the profile's `plan_building_blocks`
 # lists (plan_opener/per_step/plan_closer) the GUI should offer.
+#
+# ``motor_whole`` is only meaningful for dtype=="device", category=="motor"
+# (set via the ``:whole`` typespec modifier, e.g. ``device{motor:whole}``):
+# True means the plan wants the bare multi-axis device, so the GUI/AutoPILOT
+# must never force/offer an axis choice for this field.
 ParamSpec = namedtuple(
     "ParamSpec",
-    "name dtype units short long default required choices blank_omits category",
-    defaults=(None,),  # category defaults to None
+    "name dtype units short long default required choices blank_omits category motor_whole",
+    defaults=(None, False),  # category defaults to None, motor_whole to False
 )
 
 _NODEFAULT = object()  # sentinel: signature arg with no default (=> required)
@@ -250,17 +259,18 @@ def _parse_parameters(doc: str) -> dict[str, dict]:
     return entries
 
 
-def _parse_typespec(typespec: str) -> tuple[str, str, list[str], str | None]:
-    """Parse a typespec into (dtype, units, choices, category).
+def _parse_typespec(typespec: str) -> tuple[str, str, list[str], str | None, bool]:
+    """Parse a typespec into (dtype, units, choices, category, motor_whole).
 
     Examples::
 
-        'float [deg]'          -> ('float', 'deg', [], None)
-        'choice{a, b}'         -> ('choice', '', ['a', 'b'], None)
-        'device{area_detector}'-> ('device', '', [], 'area_detector')
-        'device_list{scaler}'  -> ('device_list', '', [], 'scaler')
-        'device'               -> ('device', '', [], None)
-        'block{plan_opener}'   -> ('block', '', [], 'plan_opener')
+        'float [deg]'          -> ('float', 'deg', [], None, False)
+        'choice{a, b}'         -> ('choice', '', ['a', 'b'], None, False)
+        'device{area_detector}'-> ('device', '', [], 'area_detector', False)
+        'device_list{scaler}'  -> ('device_list', '', [], 'scaler', False)
+        'device'               -> ('device', '', [], None, False)
+        'block{plan_opener}'   -> ('block', '', [], 'plan_opener', False)
+        'device{motor:whole}'  -> ('device', '', [], 'motor', True)
     """
     units = ""
     m = re.search(r"\[([^\]]*)\]\s*$", typespec)
@@ -271,9 +281,11 @@ def _parse_typespec(typespec: str) -> tuple[str, str, list[str], str | None]:
     dtype = typespec.strip()
     choices: list[str] = []
     category: str | None = None
+    motor_whole = False
     # Brace payload after the dtype keyword: choice{a,b} | device{cat} |
     # device_list{cat} | block{cat}.  choice -> comma list; device*/block ->
-    # single category.
+    # single category, optionally suffixed ``:whole`` (meaningful only for
+    # device{motor:whole} -- caller/validator flags any other use as misuse).
     bm = re.match(r"(choice|device_list|device|block)\s*\{(.*)\}$", dtype)
     if bm:
         dtype = bm.group(1)
@@ -281,8 +293,12 @@ def _parse_typespec(typespec: str) -> tuple[str, str, list[str], str | None]:
         if dtype == "choice":
             choices = [c.strip() for c in payload.split(",") if c.strip()]
         else:
+            wm = re.match(r"(.*):whole$", payload.strip())
+            if wm:
+                motor_whole = True
+                payload = wm.group(1)
             category = payload.strip() or None
-    return dtype, units, choices, category
+    return dtype, units, choices, category, motor_whole
 
 
 def _parse_body(body_lines: list[str]) -> tuple[str, str]:
@@ -330,7 +346,7 @@ def find_plan_specs(filepath: str) -> dict[str, dict]:
         for name, default in _signature(node):
             if name not in doc_meta:
                 continue  # undocumented (e.g. md) => hidden
-            dtype, units, choices, category = _parse_typespec(
+            dtype, units, choices, category, motor_whole = _parse_typespec(
                 doc_meta[name]["typespec"]
             )
             short, long = _parse_body(doc_meta[name]["body"])
@@ -348,6 +364,7 @@ def find_plan_specs(filepath: str) -> dict[str, dict]:
                     choices=choices,
                     blank_omits=blank_omits,
                     category=category,
+                    motor_whole=motor_whole,
                 )
             )
 
@@ -444,10 +461,12 @@ def validate_docstring_text(docstring: str, arg_names: list[str] | None = None) 
     documented_params: dict[str, dict] = {}
 
     for name, entry in doc_meta.items():
-        dtype, units, choices, category = _parse_typespec(entry["typespec"])
+        dtype, units, choices, category, motor_whole = _parse_typespec(entry["typespec"])
         short, long = _parse_body(entry["body"])
         if dtype not in _KNOWN_DTYPES:
             errors.append(f"parameter '{name}': unknown dtype '{dtype}'")
+        if motor_whole and not (dtype == "device" and category == "motor"):
+            errors.append(f"parameter '{name}': ':whole' is only valid on device{{motor:whole}}")
         if arg_names is not None and name not in arg_names:
             errors.append(f"parameter '{name}': documented but not in the function's real signature {arg_names}")
         if not long:
@@ -457,6 +476,7 @@ def validate_docstring_text(docstring: str, arg_names: list[str] | None = None) 
             "units": units,
             "choices": choices,
             "category": category,
+            "motor_whole": motor_whole,
             "short": short,
             "long": long,
         }

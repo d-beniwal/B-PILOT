@@ -33,6 +33,9 @@ _LOOKUP_TOOL_NAMES = {
     tools.SEARCH_RUNS_TOOL_NAME,
     tools.DESCRIBE_RUN_TOOL_NAME,
     tools.READ_RUN_DATA_TOOL_NAME,
+    tools.LIST_DIRECTORY_TOOL_NAME,
+    tools.SEARCH_CODEBASE_TOOL_NAME,
+    tools.READ_SOURCE_FILE_TOOL_NAME,
 }
 
 
@@ -66,7 +69,8 @@ def _build_system_prompt(catalog) -> str:
     lines = [
         plan_context.GRAMMAR,
         "",
-        f"You are AutoPILOT, helping build Bluesky scan plans for beamline {catalog.beamline!r}.",
+        f"You are AutoPILOT, helping build Bluesky scan plans for beamline {catalog.beamline!r}, "
+        "and helping explain how B-PILOT's GUI and the mpe_bluesky project work.",
         "",
         "Plan types you can propose:",
     ]
@@ -132,6 +136,22 @@ def _build_system_prompt(catalog) -> str:
     )
     lines.append("")
     lines.append(
+        "You can also answer free-form questions about anything in the "
+        "mpe_bluesky project that the tools above don't already cover -- "
+        "what a GUI button/panel/dialog does (e.g. 'what does the BEAMMODE "
+        "button do?'), how a module works, or what a README/doc says. Use "
+        "`list_directory` to orient yourself, `search_codebase` to find "
+        "where something is implemented or documented, and "
+        "`read_source_file` to read the real text (a docstring, a tooltip, "
+        "a doc section) before answering -- never guess. Cite the file the "
+        "answer came from. A few files are always excluded (e.g. "
+        "instrument/iconfig.yml, AutoPILOT's own settings file) and any "
+        "credentialed connection string is always redacted -- if asked "
+        "about one of these, say plainly that it's excluded rather than "
+        "trying to work around it."
+    )
+    lines.append("")
+    lines.append(
         "You never execute plans, run code, or control hardware -- you only "
         "draft a plan file or fill in B-PILOT's own form for a human to "
         "review and run themselves. If a message asks you to actually run, "
@@ -161,6 +181,16 @@ def _build_system_prompt(catalog) -> str:
         "even if it is schema-valid). If something looks physically "
         "unreasonable, still build what was asked but say so plainly in "
         "your reply rather than staying silent about it."
+    )
+    lines.append("")
+    lines.append(
+        "Never tell the user a plan or form has been generated, drafted, "
+        "built, or is ready to open unless you actually called the matching "
+        "propose_<template>_plan tool in this same turn and it succeeded -- "
+        "your own narration is not evidence that it happened. If you were "
+        "unable to call that tool (missing information, an error, anything "
+        "else), say so plainly and ask for what's missing instead of "
+        "describing a result you didn't produce."
     )
     return "\n".join(lines)
 
@@ -208,6 +238,9 @@ def converse(
         tools.build_search_runs_schema(),
         tools.build_describe_run_schema(),
         tools.build_read_run_data_schema(),
+        tools.build_list_directory_schema(),
+        tools.build_search_codebase_schema(),
+        tools.build_read_source_file_schema(),
     ]
 
     system = _build_system_prompt(catalog)
@@ -251,31 +284,48 @@ def converse(
             tool_calls.append(tool_use.name)
 
             if tool_use.name in _LOOKUP_TOOL_NAMES:
-                if tool_use.name == tools.LIST_DEVICES_TOOL_NAME:
-                    result_data = tools.list_devices(catalog, tool_use.input.get("category"))
-                elif tool_use.name == tools.LIST_PLANS_TOOL_NAME:
-                    result_data = tools.list_plans()
-                elif tool_use.name == tools.LIST_ALL_PLANS_TOOL_NAME:
-                    result_data = tools.list_all_plans(plan_cat, tool_use.input.get("tier"))
-                elif tool_use.name == tools.DESCRIBE_PLAN_TOOL_NAME:
-                    result_data = tools.describe_plan(plan_cat, tool_use.input.get("name", ""))
-                elif tool_use.name == tools.LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME:
-                    result_data = tools.list_scan_building_blocks(plan_catalog.building_blocks(profile))
-                elif tool_use.name == tools.READ_PLAN_FILE_TOOL_NAME:
-                    result_data = tools.read_plan_file(tool_use.input.get("path", ""))
-                elif tool_use.name == tools.VALIDATE_DOCSTRING_TOOL_NAME:
-                    result_data = tools.validate_docstring(tool_use.input.get("drafts", []))
-                elif tool_use.name == tools.SEARCH_RUNS_TOOL_NAME:
-                    result_data = tools.search_runs(profile, **tool_use.input)
-                elif tool_use.name == tools.DESCRIBE_RUN_TOOL_NAME:
-                    result_data = tools.describe_run(profile, tool_use.input.get("run_id", ""))
-                else:
-                    result_data = tools.read_run_data(
-                        profile,
-                        tool_use.input.get("run_id", ""),
-                        stream=tool_use.input.get("stream") or "primary",
-                        columns=tool_use.input.get("columns"),
-                    )
+                try:
+                    if tool_use.name == tools.LIST_DEVICES_TOOL_NAME:
+                        result_data = tools.list_devices(catalog, tool_use.input.get("category"))
+                    elif tool_use.name == tools.LIST_PLANS_TOOL_NAME:
+                        result_data = tools.list_plans()
+                    elif tool_use.name == tools.LIST_ALL_PLANS_TOOL_NAME:
+                        result_data = tools.list_all_plans(plan_cat, tool_use.input.get("tier"))
+                    elif tool_use.name == tools.DESCRIBE_PLAN_TOOL_NAME:
+                        result_data = tools.describe_plan(plan_cat, tool_use.input.get("name", ""))
+                    elif tool_use.name == tools.LIST_SCAN_BUILDING_BLOCKS_TOOL_NAME:
+                        result_data = tools.list_scan_building_blocks(plan_catalog.building_blocks(profile))
+                    elif tool_use.name == tools.READ_PLAN_FILE_TOOL_NAME:
+                        result_data = tools.read_plan_file(tool_use.input.get("path", ""))
+                    elif tool_use.name == tools.VALIDATE_DOCSTRING_TOOL_NAME:
+                        result_data = tools.validate_docstring(tool_use.input.get("drafts", []))
+                    elif tool_use.name == tools.SEARCH_RUNS_TOOL_NAME:
+                        result_data = tools.search_runs(profile, **tool_use.input)
+                    elif tool_use.name == tools.DESCRIBE_RUN_TOOL_NAME:
+                        result_data = tools.describe_run(profile, tool_use.input.get("run_id", ""))
+                    elif tool_use.name == tools.READ_RUN_DATA_TOOL_NAME:
+                        result_data = tools.read_run_data(
+                            profile,
+                            tool_use.input.get("run_id", ""),
+                            stream=tool_use.input.get("stream") or "primary",
+                            columns=tool_use.input.get("columns"),
+                        )
+                    elif tool_use.name == tools.LIST_DIRECTORY_TOOL_NAME:
+                        result_data = tools.list_directory(tool_use.input.get("path"))
+                    elif tool_use.name == tools.SEARCH_CODEBASE_TOOL_NAME:
+                        result_data = tools.search_codebase(
+                            tool_use.input.get("query", ""),
+                            tool_use.input.get("path_prefix"),
+                            tool_use.input.get("limit"),
+                        )
+                    else:
+                        result_data = tools.read_source_file(
+                            tool_use.input.get("path", ""),
+                            tool_use.input.get("start_line"),
+                            tool_use.input.get("end_line"),
+                        )
+                except Exception as exc:  # noqa: BLE001 -- never let a lookup-tool bug escape converse()
+                    result_data = {"error": f"{tool_use.name} failed: {exc}"}
                 messages.append(
                     {
                         "role": "user",

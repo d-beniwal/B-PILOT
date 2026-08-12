@@ -49,6 +49,10 @@ Rules:
   lists (plan_opener, per_step, plan_closer, suspender, pseudo_suspender) --
   like device/device_list it is a real Python identifier, never a quoted
   string, and it must always be given a concrete value (never left blank).
+* device{motor:whole} (category "motor" only): use this instead of plain
+  device{motor} when the plan wants the bare multi-axis device object itself
+  (it indexes sub-axes internally, e.g. `sms.y`) rather than a single
+  resolved motor.axis. Do not use ":whole" on any other dtype/category.
 * units are optional, in square brackets, e.g. [s], [mm], [deg].
 * the body line is split on the FIRST ' :: ' into a short label and a
   longer tooltip -- both are required.

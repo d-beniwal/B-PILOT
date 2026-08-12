@@ -471,8 +471,15 @@ class ChatDockWidget(QtWidgets.QDockWidget):
         body_html = escape(result.message).replace("\n", "<br>")
         if s["show_raw_output"]:
             body_html += self._debug_block(result)
+        # Hardcoded, theme-independent border for a failed turn -- none of
+        # themes.py's 4 presets define an error/warning color, and this must
+        # stay visually distinct regardless of the active theme so a failed
+        # reply never looks identical to a real success (defense-in-depth
+        # alongside the system-prompt fix telling the model not to narrate a
+        # false success in the first place).
+        border = "#cc4444" if not result.ok else self._theme.border
         html = _bubble_html(
-            header, body_html, align="left", bg=s["assistant_bubble_bg"], border=self._theme.border,
+            header, body_html, align="left", bg=s["assistant_bubble_bg"], border=border,
             fg=s["assistant_text_color"], muted=self._theme.muted, font_px=s["font_size"],
             container_width=self._transcript.viewport().width(), font_family=self._theme.font_family,
         )

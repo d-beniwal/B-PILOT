@@ -74,9 +74,11 @@ def _make_field_widget(spec: ParamSpec, on_change):
         if spec.default is not None and str(spec.default) in opts:
             widget.setCurrentText(str(spec.default))
         widget.currentTextChanged.connect(on_change)
-    elif spec.dtype == "device" and spec.category == "motor":
+    elif spec.dtype == "device" and spec.category == "motor" and not spec.motor_whole:
         # A motor is a multi-axis device -> pick motor + axis; the
-        # generated token is `motor.axis` (see MotorAxisPicker).
+        # generated token is `motor.axis` (see MotorAxisPicker). Skipped for
+        # `device{motor:whole}` fields, which fall through to the plain
+        # `device` branch below (bare device, no axis resolution).
         widget = MotorAxisPicker(
             allow_blank=spec.blank_omits or not spec.required
         )
@@ -241,7 +243,7 @@ def field_error(spec: ParamSpec, widget) -> str | None:
         if not widget.currentText().strip() and spec.required:
             return f"{short}: required"
         return None
-    if spec.dtype == "device" and spec.category == "motor":
+    if spec.dtype == "device" and spec.category == "motor" and not spec.motor_whole:
         if not widget.motor():
             return f"{short}: required" if spec.required else None
         return widget.error()  # motor chosen -> may still need an axis
@@ -345,7 +347,7 @@ def parse_values(
                 values[spec.name] = val
             elif spec.default not in (None, _NODEFAULT):
                 values[spec.name] = spec.default
-        elif spec.dtype == "device" and spec.category == "motor":
+        elif spec.dtype == "device" and spec.category == "motor" and not spec.motor_whole:
             # Motor -> `motor.axis` (RawCode, emitted unquoted).
             if not widget.motor():
                 if spec.required:
