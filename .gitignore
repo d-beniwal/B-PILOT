@@ -1,0 +1,40 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Claude context/config — local dev tooling, kept out of the repo (same
+# convention as the sibling mpe_bluesky/3idc-bits projects) so it never
+# leaks into this repo's history; stays on disk, just untracked.
+/CLAUDE.md
+/.context/
+
+# Per-installation runtime override (regenerated on first Configuration save;
+# should not carry machine-specific state between checkouts).
+gui_config.json
+
+# Per-workstation live settings, bootstrapped from each profile's committed
+# default_config.json on first use — should not carry machine-specific state
+# between checkouts.
+profiles/*/active_config.json
+
+# AutoPILOT (folded into this repo 2026-07-31 — was previously its own
+# nested git repo; that standalone history is backed up at
+# ../.context/autopilot_standalone_history.bundle). Its own nested
+# AutoPILOT/.gitignore still covers its runtime/generated artifacts
+# (.venv/, generated_plans/*, autopilot_settings.json).
+
+# Local presentation/reference documents (overview + AutoPILOT architecture
+# write-ups and their PDF renders) — working notes, not part of the repo.
+documents/
+
+# Beamline-side data-export tooling + its output (reads the real MongoDB
+# catalog on the beamline workstation to build an offline test archive) —
+# site-specific ops script and any exported run data, not part of the repo.
+scripts/
+
+# Real run metadata exported from the hexm catalog (see scripts/
+# export_hexm_sample.py) for off-hardware viewer testing — an actual data
+# dump (uids, plan args, instrument config), not source; see
+# .context/DEPLOY.md "Testing the viewer off-hardware" for how to regenerate
+# and reconstitute it locally as the 'hexm_test' databroker catalog.
+/hexm_export/

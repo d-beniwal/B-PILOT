@@ -1,0 +1,127 @@
+{
+  "default_plan_file": "scans_stationary.py",
+  "visible_plan_files": [
+    "scan_skeletons.py",
+    "scans_standard.py",
+    "scans_stationary.py"
+  ],
+  "bluesky_startup": "from instrument.collection import *",
+  "keep_kernel_on_exit": true,
+  "last_kernel_connection_file": "/Users/dbeniwal/.bluesky_pilot/20ide/kernel.json",
+  "beamline": "20ide",
+  "use_screen": true,
+  "launch_mode": "embedded",
+  "dm_experiment": "",
+  "setup_file": "exp_setup.yml",
+  "script_run_mode": "screen",
+  "ui_scale": 1.0,
+  "device_search_paths": [
+    "instrument/devices/s20ide_devices"
+  ],
+  "device_selection": {
+    "area_detector": {
+      "gh2": false,
+      "pg6": true,
+      "pimega": true,
+      "s20varex2": true
+    },
+    "motor": {
+      "attenE": true,
+      "d2E": true,
+      "d3E": true,
+      "d4_1E": true,
+      "d4_2E": true,
+      "hlsms": true,
+      "hlsmstbl": true,
+      "ic1E": true,
+      "ic2E": true,
+      "lens1E": true,
+      "lens2E": true,
+      "lens3E": true,
+      "lens4E": true,
+      "nfE": true,
+      "samE": true,
+      "saxsE": true,
+      "sic1E": true,
+      "sic2E": true,
+      "tomoE": true,
+      "txm_cam": true,
+      "txm_lensE": true,
+      "txmE": true,
+      "zondaD2": true,
+      "zondaNF": true,
+      "zondaSMS": true
+    },
+    "scaler": {
+      "doorsE": true,
+      "hvacE": true,
+      "jewellE": true,
+      "labjackE": true,
+      "tamm1E": true,
+      "tamm2E": true,
+      "tamm3E": true,
+      "tc32E": true
+    },
+    "shutter": {
+      "fsE": true
+    },
+    "slit": {
+      "slitEds": true,
+      "slitEus": true,
+      "txm_slit1": true,
+      "txm_slit2": true
+    }
+  },
+  "databroker_catalog": "hexm",
+  "databroker_uri": "",
+  "databroker_nexus_dir": "",
+  "plan_building_search_paths": [
+    "instrument/plans/scan_hw_triggering.py",
+    "instrument/plans/scan_sw_triggering.py"
+  ],
+  "suspender_search_paths": [
+    "instrument/plans/suspenders.py",
+    "instrument/plans/suspenders_pseudo.py",
+    "instrument/plans/s20ide_plans/s20ide_suspenders.py"
+  ],
+  "switch_to_search_paths": [
+    "instrument/plans/s20ide_plans/s20ide_shortcuts.py"
+  ],
+  "plan_building_blocks": {
+    "plan_opener": [
+      "hardware_opener",
+      "non_countable_opener",
+      "scaler_opener",
+      "generic_opener"
+    ],
+    "per_step": [
+      "hardware_sweep_",
+      "step_and_shoot_",
+      "scaler_step_and_shoot_",
+      "tomo_step_and_shoot_",
+      "tomo_sweep_",
+      "scaler_sweep_",
+      "step_ladder_",
+      "sweep_ladder_",
+      "scaler_step_ladder_",
+      "scaler_inner_step_",
+      "handoff_sweep_",
+      "supersweep_"
+    ],
+    "plan_closer": [
+      "hardware_closer",
+      "generic_closer",
+      "scaler_closer"
+    ],
+    "suspender": [
+      "current_suspender",
+      "permit_suspender",
+      "disk_monitor",
+      "Elight_monitor"
+    ],
+    "pseudo_suspender": [
+      "filename_mutator",
+      "drive_checker"
+    ]
+  }
+}

@@ -1,0 +1,148 @@
+# bpilot_mpe_dev — BEAMLINE environment for B-PILOT (GUI + AutoPILOT + kernel)
+# =====================================================================
+# This is the BEAMLINE-capable variant: everything needed to run B-PILOT
+# fully on the beamline workstation, including the embedded kernel's
+# `from instrument.collection import *` (full instrument import, not just
+# the GUI process). It intentionally DIVERGES from the macOS dev-only copy
+# at ../../environments/mpe_bluesky_dev.yml (the `mpe_bluesky` workspace
+# project), which excludes hklpy/aps-dm-api because those don't resolve off
+# the APS Linux subnet. On the beamline network they're required and
+# included below.
+#
+# Channels/version floors for the conda-only, APS-subnet-restricted packages
+# (epics-base, hklpy, aps-dm-api) mirror environment_2024_1.yml — the
+# beamline's baseline bluesky env — rather than exact pins, since those
+# packages have no pip wheels and must be solved fresh on the target
+# machine (apsu channel is APS-subnet only; this file cannot be conda-solved
+# from off-site). The GUI/Jupyter/Bluesky-Python stack below keeps its
+# exact `==` pins (PyPI wheels resolve the same way cross-platform for a
+# given version).
+#
+# Confirmed against instrument/ source: `from hkl import ...`
+# (s1idc_motors.py) needs hklpy; `import dm` / `from dm import ...`
+# (queueserver_framework.py, _apstools_data_management.py,
+# aps_data_management.py) needs aps-dm-api; `import epics`
+# (metadata.py, queueserver_framework.py, commissioning_jul25.py) needs
+# pyepics + epics-base.
+#
+# create (on the beamline workstation, on the APS subnet):
+#   conda env create -n bpilot_mpe_dev -f environments/bpilot_mpe_dev.yml --solver=libmamba
+# activate:
+#   conda activate bpilot_mpe_dev
+# run the GUI (from B-PILOT/):
+#   python launch.py
+
+name: bpilot_mpe_dev
+
+channels:
+  # apsu first: gives an epics-base compatible with pyepics (see pip section)
+  - apsu
+  - conda-forge
+  - aps-anl-tag
+  - defaults
+
+dependencies:
+  # --- Python core (conda) --------------------------------------------------
+  - python=3.11.15
+  - pip
+
+  # --- full instrument import (conda-only; apsu channel; APS-subnet only) ---
+  # --- version floors match environment_2024_1.yml, not exact pins ---------
+  - epics-base >=7.0.5
+  - hklpy >=1.0.3
+  - aps-dm-api >=5
+
+  # --- Qt bindings (conda, not pip) ------------------------------------------
+  # Must come from conda-forge, matching environment_2024_1.yml's `pyqt =5`/
+  # `qt =5` exactly, NOT pip's PyQt5/PyQt5-Qt5 wheels. The pip wheels bundle
+  # their own Qt5 libs but dlopen xcb-side system libraries (e.g.
+  # libxcb-cursor.so.0, required since PyQt5-Qt5 5.15.9+) at runtime instead
+  # of vendoring them; on redwood this produced
+  # `qt.qpa.plugin: Could not load the Qt platform plugin "xcb" ... even
+  # though it was found` (plugin file present, but its own dependency chain
+  # unresolved against the OS). conda-forge's qt/pyqt build vendors a
+  # self-consistent set of libxcb/xcb-util-cursor/libxkbcommon-x11 inside the
+  # env, which is why `bluesky_2024_2` (conda pyqt/qt) launches fine while an
+  # earlier pip-pinned version of this env did not. Confirmed 2026-08-10.
+  - pyqt =5
+  - qt =5
+
+  - pip:
+      # =====================================================================
+      # SECTION 1 — overlaps with environment_2024_1.yml (the shared team's
+      # baseline bluesky_2024_1 conda env). Pip-pinned here for an exactly
+      # reproducible GUI-process solve; a couple of names differ from the
+      # conda package (pyepics ~= conda `pyEpics`). Qt bindings are conda,
+      # not pip — see the `pyqt =5`/`qt =5` entries above.
+      # =====================================================================
+
+      - ipython==9.15.0
+
+      # --- Bluesky framework ------------------------------------------------
+      - bluesky==1.15.1
+      - ophyd==1.11.2
+      - ophyd-registry==2.0.0
+      - apstools==1.7.10
+      - databroker==1.2.5
+      - bluesky-queueserver==0.0.24
+      - bluesky-queueserver-api==0.0.13
+      - bluesky-live==0.0.8
+      - bluesky-widgets==0.0.18
+      - area-detector-handlers==0.0.10
+      - tiled==0.2.14
+
+      # --- EPICS client (~= conda pyEpics; needs epics-base above at runtime)
+      - pyepics==3.5.10
+
+      # --- scientific / data ------------------------------------------------
+      - pandas==2.3.3
+      - xarray==2026.7.0
+      - h5py==3.16.0
+      - hdf5plugin==7.0.0
+      - pint==0.25.3
+      - pymongo==4.17.0
+      - psutil==7.2.2
+
+      # --- APS / MPE instrument utilities ----------------------------------
+      - pyRestTable==2020.0.10
+      - spec2nexus==2021.2.8
+
+      # =====================================================================
+      # SECTION 2 — B-PILOT / AutoPILOT-only additions: needed to run the GUI
+      # (embedded kernel, console, plotting) and/or the AutoPILOT chat dock,
+      # but NOT present in environment_2024_1.yml.
+      # =====================================================================
+
+      # --- Qt console (embedded kernel UI) ---------------------------------
+      - qtconsole==5.7.2
+      - QtPy==2.4.3
+
+      # --- Jupyter kernel / messaging (embedded kernel, client, recorder) --
+      - ipykernel==7.3.0
+      - jupyter-client==8.9.1
+      - pyzmq==27.1.0
+      - traitlets==5.15.1
+
+      # --- plotting / data viewer ------------------------------------------
+      - matplotlib==3.11.0
+
+      # --- Bluesky ecosystem extras not in environment_2024_1.yml ----------
+      - bluesky-tiled-plugins==2.0.8
+      - event-model==1.24.0
+      - intake==0.6.4
+      - caproto==1.3.0
+
+      # --- scientific / data extras -----------------------------------------
+      - numpy==2.3.5
+      - scipy==1.17.1
+      - tifffile==2026.3.3
+      - toolz==1.1.0
+      - PyYAML==6.0.3
+
+      # --- APS / MPE instrument utilities extras ----------------------------
+      - xraydb==4.5.8
+      - GitPython==3.1.45
+
+      # --- AutoPILOT chat dock (optional; gui_qt/autopilot_bridge.py
+      # --- degrades gracefully if this isn't installed) --------------------
+      - anthropic==0.118.0
