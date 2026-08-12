@@ -35,7 +35,8 @@ def _status_color() -> dict[str, str]:
     }
 
 
-_STATE_LABEL = {qs.IDLE: "Idle", qs.S_RUNNING: "Running", qs.PAUSED: "Paused"}
+def _banner_qss(color: str) -> str:
+    return f"font-weight:bold; font-size:{S.px(15)}px; color:{color};"
 
 
 def _short(command: str, limit: int = 80) -> str:
@@ -72,6 +73,10 @@ class QueuePanel(QtWidgets.QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
+        self._state_lbl = QtWidgets.QLabel("Idle")
+        self._state_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        lay.addWidget(self._state_lbl)
+
         self._table = QtWidgets.QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(["#", "Name", "Status", "Command"])
         self._table.verticalHeader().setVisible(False)
@@ -95,11 +100,9 @@ class QueuePanel(QtWidgets.QWidget):
         lay.addWidget(self._table, 1)
 
         row = QtWidgets.QHBoxLayout()
-        self._start_btn = S.primary_btn("▶ Start")
-        self._start_btn.setMinimumHeight(S.px(26))
-        self._start_btn.clicked.connect(self._start)
-        self._pause_btn = QtWidgets.QPushButton("Pause")
-        self._pause_btn.clicked.connect(self._pause)
+        self._toggle_btn = S.primary_btn("▶ Start")
+        self._toggle_btn.setMinimumHeight(S.px(26))
+        self._toggle_btn.clicked.connect(self._on_toggle)
         up = QtWidgets.QPushButton("▲")
         up.setToolTip("Move selected plan up")
         up.clicked.connect(lambda: self._move(-1))
@@ -116,12 +119,9 @@ class QueuePanel(QtWidgets.QWidget):
             "so you can tweak and resubmit it."
         )
         self._copy_btn.clicked.connect(self._copy_to_form)
-        for w in (self._start_btn, self._pause_btn, up, down, delete, clear, self._copy_btn):
+        for w in (self._toggle_btn, up, down, delete, clear, self._copy_btn):
             row.addWidget(w)
         row.addStretch(1)
-        self._state_lbl = QtWidgets.QLabel("Idle")
-        self._state_lbl.setStyleSheet(f"color: {S.MUTED};")
-        row.addWidget(self._state_lbl)
         lay.addLayout(row)
 
     # ── Public: add to queue ─────────────────────────────────────────────────────
@@ -150,6 +150,12 @@ class QueuePanel(QtWidgets.QWidget):
         return cell.data(QtCore.Qt.UserRole) if cell is not None else None
 
     # ── Controls ──────────────────────────────────────────────────────────────────
+
+    def _on_toggle(self) -> None:
+        if qs.load(self._beamline()).get("state") == qs.S_RUNNING:
+            self._pause()
+        else:
+            self._start()
 
     def _start(self) -> None:
         bl = self._beamline()
@@ -263,12 +269,18 @@ class QueuePanel(QtWidgets.QWidget):
                     self._table.setCurrentCell(r, 0)
                     break
 
-        self._state_lbl.setStyleSheet(f"color: {S.MUTED};")
-        self._state_lbl.setText(_STATE_LABEL.get(data.get("state"), "Idle"))
+        state = data.get("state")
+        color, text = {
+            qs.S_RUNNING: (S.STATUS_RUNNING, "● Running"),
+            qs.PAUSED: (S.STATUS_WAITING, "❚❚ Paused"),
+        }.get(state, (S.MUTED, "Idle"))
+        self._state_lbl.setStyleSheet(_banner_qss(color))
+        self._state_lbl.setText(text)
+        self._toggle_btn.setText("⏸ Pause" if state == qs.S_RUNNING else "▶ Start")
 
     def _set_state_msg(self, text: str, *, warn: bool = False) -> None:
-        self._state_lbl.setStyleSheet(f"color: {S.ERROR if warn else S.MUTED};")
+        self._state_lbl.setStyleSheet(_banner_qss(S.ERROR if warn else S.MUTED))
         self._state_lbl.setText(text)
         QtCore.QTimer.singleShot(
-            3000, lambda: self._state_lbl.setStyleSheet(f"color: {S.MUTED};")
+            3000, lambda: self._state_lbl.setStyleSheet(_banner_qss(S.MUTED))
         )

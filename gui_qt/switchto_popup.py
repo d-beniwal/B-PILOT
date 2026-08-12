@@ -102,12 +102,15 @@ class SwitchToButton(QtWidgets.QPushButton):
         self.setEnabled(ready)
         if not ready:
             self.setText("Mode:\n—")
+            self.setStyleSheet(_button_qss(S.MUTED))
 
     def note_code_ran(self, source: str) -> None:
-        """Update the label once a `switch_to_*(...)` call actually ran."""
+        """Update the label and highlight once a `switch_to_*(...)` call
+        actually ran (green = active, mirroring ContAcqButton)."""
         m = _MODE_RE.search(source)
         if m:
             self.setText(f"Mode:\n{m.group(1)}")
+            self.setStyleSheet(_button_qss(S.CMD_RE))
 
     def last_dispatch_area_detector_devices(self) -> list:
         """area_detector device name(s) bound in the command last produced by
