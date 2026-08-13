@@ -3,6 +3,11 @@
 Small, dependency-free settings store for things the user should be able to
 change without editing code:
 
+* **Location** — ``project_root``: an optional override pointing at the real
+  ``mpe_bluesky`` checkout, so B-PILOT itself can be checked out anywhere
+  rather than nested inside that tree. Empty (the default) means "auto-detect
+  by walking up from B-PILOT's own location," i.e. today's behavior. Read
+  specially by :mod:`paths` at import time — see its module docstring.
 * **Files** — which plan files the plan-runner shows (the search scope):
   ``plans_dir`` (folder scanned), ``import_root`` (root the generated
   ``from <module> import <plan>`` line is resolved against),
@@ -64,6 +69,15 @@ PROFILES_DIR = _paths.PROFILES_DIR
 
 # Built-in defaults. Only keys listed here are persisted / accepted.
 DEFAULTS: dict = {
+    # Optional override so B-PILOT can be checked out *anywhere*, not just
+    # nested inside the mpe_bluesky tree -- empty (the default) means "walk
+    # up from B-PILOT's own location looking for instrument/ + a root script,
+    # same as always." Read specially, and read-only, by paths.py at import
+    # time (paths._peek_project_root_override()) -- it duplicates a tiny,
+    # side-effect-free slice of this module's active-profile resolution
+    # rather than importing it, since this module imports paths already.
+    # Takes effect on next launch only, like theme/font/ui_scale below.
+    "project_root": "",
     "plans_dir": _P.USER_DIR,
     "import_root": _P.SRC_DIR,
     "default_plan_file": _P.DEFAULT_PLAN_FILE,
@@ -160,11 +174,13 @@ DEFAULTS: dict = {
 }
 
 # Keys that stay diff-only (omitted from a saved profile unless overridden),
-# even though every other key is written out in full. Two kinds: paths
-# derived from *this* GUI's own location (B_PILOT/paths.py) — baking them into
-# a profile would break portability to another workstation — and pure
-# runtime state that isn't really a "setting" at all.
+# even though every other key is written out in full. Three kinds: paths
+# derived from *this* GUI's own location (B_PILOT/paths.py), an explicit
+# override of that same location (project_root), and pure runtime state that
+# isn't really a "setting" at all -- all workstation-specific, so baking any
+# of them into a profile would break portability to another workstation.
 _WORKSTATION_KEYS = {
+    "project_root",
     "plans_dir",
     "import_root",
     "embedded_starter_script",

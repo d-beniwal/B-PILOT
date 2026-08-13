@@ -263,18 +263,20 @@ class MainWindow(QtWidgets.QMainWindow):
         old_scale = config.get("ui_scale")
         old_theme = config.get("theme")
         old_font = config.get("font_family")
+        old_project_root = config.get("project_root")
         config.set_active_profile(name)
         self._apply_profile_change(f"Switched to profile '{name}'.")
         if (
             config.get("ui_scale") != old_scale
             or config.get("theme") != old_theme
             or config.get("font_family") != old_font
+            or config.get("project_root") != old_project_root
         ):
             QtWidgets.QMessageBox.information(
                 self,
                 "Restart required",
-                "Restart B-PILOT for the new profile's appearance settings "
-                "to take effect.",
+                "Restart B-PILOT for the new profile's appearance and/or "
+                "project-location settings to take effect.",
             )
 
     # ── Right panel: console + notes ────────────────────────────────────────────
@@ -429,6 +431,7 @@ class MainWindow(QtWidgets.QMainWindow):
         old_scale = config.get("ui_scale")
         old_theme = config.get("theme")
         old_font = config.get("font_family")
+        old_project_root = config.get("project_root")
         dlg = ConfigDialog(self)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             # The dialog may have created/deleted/renamed profiles or
@@ -440,11 +443,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 config.get("ui_scale") != old_scale
                 or config.get("theme") != old_theme
                 or config.get("font_family") != old_font
+                or config.get("project_root") != old_project_root
             ):
                 QtWidgets.QMessageBox.information(
                     self,
                     "Restart required",
-                    "Restart B-PILOT for the new appearance settings to take effect.",
+                    "Restart B-PILOT for the new appearance and/or "
+                    "project-location settings to take effect.",
                 )
 
     def _show_autopilot_diagnostics(self) -> None:
