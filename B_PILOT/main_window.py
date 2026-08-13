@@ -142,7 +142,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_menu()
         self.statusBar().showMessage(
-            "Pick a Launch mode → Launch IPython → Load Bluesky, then Run plans."
+            "Pick a Launch mode → Launch IPython, then Run plans."
         )
         QtCore.QTimer.singleShot(0, self._refresh_attach_availability)
 
@@ -197,15 +197,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._attach_btn.setToolTip(self._ATTACH_TOOLTIP_IDLE)
         self._attach_btn.clicked.connect(self._attach_console)
         lay.addWidget(self._attach_btn)
-
-        self._load_btn = QtWidgets.QPushButton("Load Bluesky")
-        self._load_btn.setToolTip(
-            "Run the configured startup command in the console (connects to "
-            "hardware). Set it in Python → Configuration."
-        )
-        self._load_btn.setEnabled(False)
-        self._load_btn.clicked.connect(self._load_bluesky)
-        lay.addWidget(self._load_btn)
 
         self._midas_bridge_checkbox = QtWidgets.QCheckBox("Bridge Live-View")
         self._midas_bridge_checkbox.setChecked(bool(config.get("midas_bridge_enabled")))
@@ -613,7 +604,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._profile_combo.setEnabled(False)
         self._launch_btn.setEnabled(False)
         self._attach_btn.setEnabled(False)
-        self._load_btn.setEnabled(True)
         # Restarting only works for a kernel we started (not an attached one).
         self._act_restart.setEnabled(not attached)
         self._act_shutdown.setEnabled(True)
@@ -637,6 +627,9 @@ class MainWindow(QtWidgets.QMainWindow):
             # Trusted immediately: this is exactly what LaunchDialog just wrote
             # to dm_experiment.txt before this kernel started.
             self._set_experiment_banner(self._last_launch_experiment, confirmed=True)
+            # Fresh kernel only -- an attached one already went through this
+            # under its own original launch.
+            self.console.run_startup_commands()
 
     def _start_experiment_probe(self) -> None:
         """Poll the attached kernel for DM_EXP until it resolves, then stop.
@@ -732,7 +725,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._profile_combo.setEnabled(True)
         self._launch_btn.setEnabled(True)
         self._attach_btn.setEnabled(True)
-        self._load_btn.setEnabled(False)
         self._act_restart.setEnabled(False)
         self._act_shutdown.setEnabled(False)
         self.runner.set_console_ready(False)
@@ -783,24 +775,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._exp_label.setText("")
         if getattr(self, "_exp_probe_timer", None) is not None:
             self._exp_probe_timer.stop()
-
-    def _load_bluesky(self) -> None:
-        from . import config
-
-        cmd = config.get("bluesky_startup")
-        ok = QtWidgets.QMessageBox.warning(
-            self,
-            "Load Bluesky",
-            f"This runs the following in the console, which CONNECTS TO EPICS / "
-            f"hardware:\n\n    {cmd}\n\nOnly do this on a real beamline "
-            f"workstation.\n(Change the command in Python → Configuration.)\n\n"
-            f"Continue?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
-        )
-        if ok == QtWidgets.QMessageBox.Yes:
-            self.console.load_bluesky()
-            self._set_toolbar_status("Loaded Bluesky startup.")
 
     def _toggle_viewer(self) -> None:
         """Launch the Bluesky data viewer as a detached, independent process,

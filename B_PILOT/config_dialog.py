@@ -439,14 +439,15 @@ class ConfigDialog(QtWidgets.QDialog):
         for cb in checks.values():
             cb.setChecked(checked)
 
-    # ── Launch Session: Load Bluesky command(s) ──────────────────────────────────
+    # ── Launch Session: auto-run startup command(s) ──────────────────────────────
 
     def _build_launch_card(self) -> QtWidgets.QWidget:
-        card = S.make_card("Launch  (Load Bluesky command)")
+        card = S.make_card("Launch  (auto-run on start)")
         card.body.addWidget(
             QtWidgets.QLabel(
-                "Run in the console when you click “Load Bluesky” "
-                "(one command per line — CONNECTS TO HARDWARE on a beamline):"
+                "Run automatically in the console right after Launch IPython "
+                "connects (one command per line — CONNECTS TO HARDWARE on a "
+                "beamline):"
             )
         )
         self._startup = QtWidgets.QPlainTextEdit()

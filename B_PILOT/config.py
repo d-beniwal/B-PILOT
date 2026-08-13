@@ -10,8 +10,8 @@ change without editing code:
   explicit whitelist of ``plans_dir``-relative paths that are even shown as
   rows in the file browser — edited via the Configuration dialog's Plan
   visibility card).
-* **Launch** — ``bluesky_startup``: the command(s) run in the console when the
-  user clicks *Load Bluesky*.
+* **Launch** — ``bluesky_startup``: the command(s) run automatically in the
+  console right after *Launch IPython* connects (one per line).
 * **Devices** — ``device_search_paths`` (directories scanned by
   :mod:`device_discovery`) and ``device_selection`` (per-name shown/hidden).
 

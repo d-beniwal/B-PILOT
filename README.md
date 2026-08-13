@@ -113,9 +113,9 @@ Open **Python → Configuration…** in the menu bar:
   browser at all (Select all / Deselect all / Refresh list). This is separate
   from the per-row checkbox in the main panel, which controls whether a
   *visible* file's plans are merged into the plan dropdown.
-- **Launch** — the command(s) run in the console on "Load Bluesky" (e.g.
-  `from instrument.collection import *`), and whether the kernel is kept
-  alive when the GUI closes.
+- **Launch** — the command(s) run automatically in the console right after
+  "Launch IPython" connects (e.g. `from instrument.collection import *`),
+  and whether the kernel is kept alive when the GUI closes.
 
 ## Connecting to the embedded kernel from a terminal
 

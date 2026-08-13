@@ -15,10 +15,12 @@ saves it to config); on GUI close the session is **detached, not killed** (see
 GUI instance calls :meth:`attach` with that connection file to reconnect to the
 same running kernel — including one with a plan still running in it.
 
-The kernel is NOT started until :meth:`start` (or :meth:`attach`) is called.  A
-fresh kernel starts PLAIN — nothing beamline runs automatically, so no
-hardware/EPICS is touched.  Loading the Bluesky startup is an explicit user
-action (:meth:`load_bluesky`).
+The kernel is NOT started until :meth:`start` (or :meth:`attach`) is called.
+On a fresh :meth:`start`, the configured startup command(s) (see
+:meth:`run_startup_commands`) run automatically once the kernel connects —
+this DOES touch hardware/EPICS if configured to.  :meth:`attach` never runs
+them: a reattached kernel already went through this once, under its own
+original launch.
 """
 from __future__ import annotations
 
@@ -488,16 +490,22 @@ class ConsolePanel(QtWidgets.QWidget):
         self._busy = False
         self.executed.emit(msg)
 
-    def load_bluesky(self, command: str | None = None) -> None:
-        """Run the configured Bluesky startup command(s) (CONNECTS TO HARDWARE).
+    def run_startup_commands(self) -> None:
+        """Run the configured startup command(s), one console cell per line.
 
-        Uses `command` when given, else the ``bluesky_startup`` config value
-        (Python → Configuration), falling back to :data:`BLUESKY_STARTUP`.
+        Uses the ``bluesky_startup`` config value (Python → Configuration →
+        Launch Session), falling back to :data:`BLUESKY_STARTUP` if unset
+        (CONNECTS TO HARDWARE if configured to).  Called automatically once,
+        right after a fresh :meth:`start` connects — never after
+        :meth:`attach` (see ``MainWindow._on_console_started``).
         """
-        cmd = command if command is not None else config.get("bluesky_startup")
+        cmd = config.get("bluesky_startup")
         if not cmd or not cmd.strip():
             cmd = BLUESKY_STARTUP
-        self.run_code(cmd)
+        for line in cmd.splitlines():
+            line = line.strip()
+            if line:
+                self.run_code(line)
 
     def detach(self) -> None:
         """Disconnect the GUI but LEAVE the kernel running (so it can be reattached).
