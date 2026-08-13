@@ -27,7 +27,7 @@ from __future__ import annotations
 from . import config as _config
 from . import paths as _paths
 
-# MPE instrument config lives at <project_root>/instrument/iconfig.yml.
+# MPE instrument config lives at <bluesky_root>/instrument/iconfig.yml.
 _ICONFIG = _paths.ICONFIG
 PAGE_SIZE = 500  # runs fetched per page (catalogs can hold tens of thousands)
 

@@ -35,7 +35,7 @@ _MODE_RE = re.compile(r"\bswitch_to_(\w+)\s*\(")
 
 def _resolve_path(path: str) -> str:
     """Resolve a (possibly project-relative) search path to an absolute one."""
-    return path if os.path.isabs(path) else os.path.join(_paths.PROJECT_ROOT, path)
+    return path if os.path.isabs(path) else os.path.join(_paths.BLUESKY_ROOT, path)
 
 
 def discover_shortcuts() -> dict[str, tuple[dict, str]]:

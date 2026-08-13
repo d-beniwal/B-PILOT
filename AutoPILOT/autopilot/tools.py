@@ -301,7 +301,7 @@ def build_validate_docstring_schema() -> dict:
 def _resolve_plan_path(path: str) -> Path | None:
     """Resolve `path` against instrument/plans/, refusing anything outside it.
 
-    Deliberately scoped to `PLANS_DIR`, not the whole project root -- this
+    Deliberately scoped to `PLANS_DIR`, not the whole Bluesky root -- this
     tool must never be able to reach `instrument/iconfig.yml`, which holds
     live plaintext MongoDB credentials.
     """
@@ -455,7 +455,7 @@ def read_run_data(profile: str | None, run_id: str, stream: str = "primary", col
 # ---------------------------------------------------------------------------
 # General project-wide knowledge tools: list_directory / search_codebase /
 # read_source_file. Scoped to the whole mpe_bluesky checkout
-# (bpilot_paths.PROJECT_ROOT), not just instrument/plans/ like read_plan_file
+# (bpilot_paths.BLUESKY_ROOT), not just instrument/plans/ like read_plan_file
 # above -- these exist so AutoPILOT can answer free-form questions about
 # anything in the project (GUI widgets, docs, plan internals) instead of only
 # the narrow slices the structured tools above cover.
@@ -503,7 +503,7 @@ def _is_denied_name(name: str) -> bool:
 
 
 def _resolve_project_path(path: str | None) -> Path | None:
-    """Resolve `path` against PROJECT_ROOT, refusing anything outside it, any
+    """Resolve `path` against BLUESKY_ROOT, refusing anything outside it, any
     denylisted file, or anything matching a denylisted name pattern anywhere
     along the path.
 
@@ -512,7 +512,7 @@ def _resolve_project_path(path: str | None) -> Path | None:
     project-wide knowledge -- see the module-level denylists for what stays
     excluded regardless.
     """
-    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    root = Path(bpilot_paths.BLUESKY_ROOT).resolve()
     candidate = Path(path) if path else root
     candidate = candidate if candidate.is_absolute() else root / candidate
     try:
@@ -544,9 +544,9 @@ def build_list_directory_schema() -> dict:
                 "path": {
                     "type": "string",
                     "description": (
-                        "Directory path, relative to the mpe_bluesky project root "
+                        "Directory path, relative to the mpe_bluesky Bluesky root "
                         "(e.g. 'B-PILOT/B_PILOT') or absolute. Omit to list the "
-                        "project root itself."
+                        "Bluesky root itself."
                     ),
                 }
             },
@@ -609,7 +609,7 @@ def build_read_source_file_schema() -> dict:
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "File path, relative to the mpe_bluesky project root or absolute.",
+                    "description": "File path, relative to the mpe_bluesky Bluesky root or absolute.",
                 },
                 "start_line": {
                     "type": "integer",
@@ -629,7 +629,7 @@ def list_directory(path: str | None) -> dict:
     resolved = _resolve_project_path(path)
     if resolved is None or not resolved.is_dir():
         return {"error": f"'{path or '.'}' is not a listable directory in this project."}
-    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    root = Path(bpilot_paths.BLUESKY_ROOT).resolve()
     entries = []
     for entry in sorted(os.scandir(resolved), key=lambda e: e.name.lower()):
         if entry.is_dir():
@@ -666,7 +666,7 @@ _COLLECT_CAP = 5000
 def search_codebase(query: str, path_prefix: str | None, limit: int | None) -> dict:
     if not query:
         return {"error": "query must not be empty."}
-    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    root = Path(bpilot_paths.BLUESKY_ROOT).resolve()
     start = _resolve_project_path(path_prefix) if path_prefix else root
     if start is None or not start.is_dir():
         return {"error": f"'{path_prefix}' is not a searchable directory in this project."}
@@ -733,7 +733,7 @@ def read_source_file(path: str, start_line: int | None, end_line: int | None) ->
     resolved = _resolve_project_path(path)
     if resolved is None or not resolved.is_file() or resolved.suffix.lower() not in _TEXT_EXTENSIONS:
         return {"error": f"'{path}' is not a readable text file in this project."}
-    root = Path(bpilot_paths.PROJECT_ROOT).resolve()
+    root = Path(bpilot_paths.BLUESKY_ROOT).resolve()
     try:
         lines = resolved.read_text(errors="ignore").splitlines()
     except OSError as exc:

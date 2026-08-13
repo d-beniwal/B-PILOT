@@ -85,7 +85,7 @@ B-PILOT auto-discovers the Bluesky instrument package it belongs to by
 walking **up** from its own location looking for an `instrument/` directory
 alongside a `blueskyStarter.sh` or `qserver.sh` script (see
 `B_PILOT/paths.py`). That means B-PILOT should sit as a subfolder directly
-inside a beamline's Bluesky project root, e.g.:
+inside a beamline's Bluesky root, e.g.:
 
 ```
 <beamline-bluesky-project>/

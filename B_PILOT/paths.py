@@ -13,16 +13,19 @@ Two anchors:
   :data:`BUNDLE_DIR`.  Files shipped *next to* the GUI (its config, the device
   manifest, the embedded-kernel starter) live here and travel with the GUI if
   the folder is relocated.
-* **Project root** — :data:`PROJECT_ROOT`, the ``mpe_bluesky`` directory that
+* **Bluesky root** — :data:`BLUESKY_ROOT`, the ``mpe_bluesky`` directory that
   holds ``instrument/``, ``user/``, ``blueskyStarter.sh`` etc.  By default it
   is found by walking *up* from the GUI looking for those markers, so it stays
   correct even if the GUI is moved to a different depth inside the project.
   Beamline runtime code (``from instrument.collection import *``) resolves
-  against this.  If the active profile sets a ``project_root`` override (see
+  against this.  If the active profile sets a ``bluesky_root`` override (see
   :mod:`config`), that path is used instead — so B-PILOT can live *anywhere*,
   with the real ``mpe_bluesky`` checkout pointed to explicitly rather than
   found by walking up from B-PILOT's own location. No override (the default)
-  means "assume B-PILOT is nested inside the project like today."
+  means "assume B-PILOT is nested inside the project like today." If an
+  override is configured but invalid, :data:`BLUESKY_ROOT_OVERRIDE_ERROR`
+  records why, so the GUI can warn at startup instead of silently falling
+  back (see ``main_window.py``'s startup check).
 
 Import this module everywhere instead of recomputing ``os.path.dirname(...)``
 chains locally.
@@ -54,28 +57,35 @@ SESSION_RECORDER = _abs(GUI_DIR, "session_recorder.py")
 PKG_PARENT = BUNDLE_DIR
 
 
-# ── Project root (an explicit profile override, else found by walking up) ────
+# ── Bluesky root (an explicit profile override, else found by walking up) ───
 _ROOT_MARKER_DIRS = ("instrument",)                        # must all be present
 _ROOT_MARKER_FILES = ("blueskyStarter.sh", "qserver.sh")   # at least one present
 
 
-def _is_project_root(path: str) -> bool:
-    """True if ``path`` looks like the ``mpe_bluesky`` project root: an
+def _bluesky_root_error(path: str) -> str | None:
+    """``None`` if ``path`` looks like the ``mpe_bluesky`` Bluesky root: an
     ``instrument/`` subdirectory plus at least one of the known root scripts.
+    Otherwise a human-readable reason it doesn't qualify.
 
     Shared by the auto-detect walk below and by validation of an explicit
-    ``project_root`` profile override, so both use the same definition of "a
-    real project root" — an override that doesn't pass this check is
-    rejected rather than silently trusted.
+    ``bluesky_root`` profile override, so both use the same definition of "a
+    real Bluesky root" — an override that fails this check is rejected
+    rather than silently trusted, and the reason is surfaced (see
+    :func:`_resolve_bluesky_root_override`) instead of swallowed.
     """
-    has_dirs = all(os.path.isdir(os.path.join(path, d)) for d in _ROOT_MARKER_DIRS)
-    has_file = any(os.path.isfile(os.path.join(path, f)) for f in _ROOT_MARKER_FILES)
-    return has_dirs and has_file
+    if not os.path.isdir(path):
+        return "the directory does not exist"
+    missing_dirs = [d for d in _ROOT_MARKER_DIRS if not os.path.isdir(os.path.join(path, d))]
+    if missing_dirs:
+        return f"it has no {'/'.join(missing_dirs)}/ subdirectory"
+    if not any(os.path.isfile(os.path.join(path, f)) for f in _ROOT_MARKER_FILES):
+        return f"it has none of {', '.join(_ROOT_MARKER_FILES)}"
+    return None
 
 
-def _find_project_root(start: str) -> str:
-    """Walk up from ``start`` to the ``mpe_bluesky`` project root (see
-    :func:`_is_project_root`).
+def _find_bluesky_root(start: str) -> str:
+    """Walk up from ``start`` to the ``mpe_bluesky`` Bluesky root (see
+    :func:`_bluesky_root_error`).
 
     Falls back to two levels above the GUI (the ``<root>/B-PILOT/B_PILOT``
     layout) if no marker is found, so the GUI still works before the project
@@ -83,7 +93,7 @@ def _find_project_root(start: str) -> str:
     """
     cur = start
     while True:
-        if _is_project_root(cur):
+        if _bluesky_root_error(cur) is None:
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:          # reached the filesystem root — stop
@@ -110,15 +120,25 @@ def _read_json_quiet(path: str) -> dict:
         return {}
 
 
-def _peek_project_root_override() -> str | None:
-    """Best-effort read of the active profile's ``project_root`` override.
+def _resolve_bluesky_root_override() -> tuple[str | None, str | None]:
+    """Best-effort read of the active profile's ``bluesky_root`` override.
 
-    Returns ``None`` (meaning "auto-detect, B-PILOT is nested inside the
-    project like today") whenever there's no active-profile pointer yet, no
-    ``project_root`` key is set, or the configured path doesn't satisfy
-    :func:`_is_project_root` — an explicit override is only honored when it
-    actually resolves to a real project tree, so a typo'd path can't
-    silently break every other path computed below.
+    Returns ``(resolved_path, error)``:
+
+    * ``(None, None)`` — no override configured (no active-profile pointer
+      yet, or the key is unset/blank). Auto-detect applies, silently — this
+      is the common case, not a problem.
+    * ``(None, "<reason>")`` — an override *was* configured but its path
+      doesn't satisfy :func:`_bluesky_root_error`. Auto-detect still applies
+      as the fallback, but the caller (``main_window.py``) uses the reason
+      to warn the user instead of failing silently — a typo'd path
+      shouldn't just look like the setting was never touched.
+    * ``(path, None)`` — a valid override.
+
+    Honors the legacy ``project_root`` key (pre-2026-08-14 name) if
+    ``bluesky_root`` isn't set, read-only — an old profile self-heals to the
+    new key on its next Configuration→Save (see ``config.py``'s
+    ``_migrate_bluesky_root_key``, which does the same for the live config).
 
     Mirrors (without importing) ``config.py``'s active-profile and
     active-over-default resolution closely enough to predict what it will
@@ -127,37 +147,41 @@ def _peek_project_root_override() -> str | None:
     pointer = _read_json_quiet(CONFIG_PATH)
     name = pointer.get("active_profile")
     if not name or not isinstance(name, str):
-        return None
+        return None, None
     profile_dir = _abs(PROFILES_DIR, name)
     active_path = _abs(profile_dir, "active_config.json")
     cfg_path = active_path if os.path.isfile(active_path) else _abs(profile_dir, "default_config.json")
     cfg = _read_json_quiet(cfg_path)
-    root = cfg.get("project_root")
+    root = cfg.get("bluesky_root") or cfg.get("project_root")
     if not isinstance(root, str) or not root.strip():
-        return None
+        return None, None
     candidate = os.path.normpath(os.path.abspath(os.path.expanduser(root.strip())))
-    return candidate if _is_project_root(candidate) else None
+    reason = _bluesky_root_error(candidate)
+    if reason:
+        return None, f"The configured Bluesky root ({candidate}) was ignored: {reason}."
+    return candidate, None
 
 
-PROJECT_ROOT = _peek_project_root_override() or _find_project_root(GUI_DIR)
+_override_root, BLUESKY_ROOT_OVERRIDE_ERROR = _resolve_bluesky_root_override()
+BLUESKY_ROOT = _override_root or _find_bluesky_root(GUI_DIR)
 
-INSTRUMENT_DIR = _abs(PROJECT_ROOT, "instrument")
-PROJECT_USER_DIR = _abs(PROJECT_ROOT, "user")
+INSTRUMENT_DIR = _abs(BLUESKY_ROOT, "instrument")
+PROJECT_USER_DIR = _abs(BLUESKY_ROOT, "user")
 ICONFIG = _abs(INSTRUMENT_DIR, "iconfig.yml")
-BLUESKY_STARTER = _abs(PROJECT_ROOT, "blueskyStarter.sh")
+BLUESKY_STARTER = _abs(BLUESKY_ROOT, "blueskyStarter.sh")
 
 # The real MPE plan directory, scanned by the plan-runner's file browser.
 PLANS_DIR = _abs(INSTRUMENT_DIR, "plans")
 
 # Root the generated ``from <module> import <plan>`` line is resolved against
 # (module = path of the plan file relative to this root).  With IMPORT_ROOT =
-# PROJECT_ROOT, ``instrument/plans/foo.py`` -> ``instrument.plans.foo``.
-IMPORT_ROOT = PROJECT_ROOT
+# BLUESKY_ROOT, ``instrument/plans/foo.py`` -> ``instrument.plans.foo``.
+IMPORT_ROOT = BLUESKY_ROOT
 
-# Default working directory for a launched (embedded) kernel: the project root,
-# so the RunEngine's ``from instrument.collection import *`` resolves regardless
-# of where the GUI itself was started from.
-KERNEL_CWD_DEFAULT = PROJECT_ROOT
+# Default working directory for a launched (embedded) kernel: the Bluesky
+# root, so the RunEngine's ``from instrument.collection import *`` resolves
+# regardless of where the GUI itself was started from.
+KERNEL_CWD_DEFAULT = BLUESKY_ROOT
 
 
 # ── Runtime state (per-user, NOT part of the repo) ───────────────────────────

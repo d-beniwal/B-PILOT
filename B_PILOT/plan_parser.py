@@ -49,7 +49,7 @@ from . import paths as _paths
 
 # SRC_DIR is the root the generated "from <module> import <plan>" line is
 # resolved against (module = path relative to SRC_DIR).  With SRC_DIR =
-# PROJECT_ROOT, instrument/plans/foo.py -> "instrument.plans.foo".
+# BLUESKY_ROOT, instrument/plans/foo.py -> "instrument.plans.foo".
 SRC_DIR = _paths.IMPORT_ROOT
 USER_DIR = _paths.PLANS_DIR
 

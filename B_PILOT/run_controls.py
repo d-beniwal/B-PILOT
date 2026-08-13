@@ -45,7 +45,7 @@ def _abort_cleanup_command() -> str | None:
     """
     import_root = config.get("import_root")
     for rel_path in config.get("switch_to_search_paths") or []:
-        abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(_paths.PROJECT_ROOT, rel_path)
+        abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(_paths.BLUESKY_ROOT, rel_path)
         if P.file_defines_function(abs_path, "abort_cleanup"):
             module = P.file_to_module(abs_path, import_root)
             return f"from {module} import abort_cleanup\nabort_cleanup()"

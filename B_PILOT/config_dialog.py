@@ -306,20 +306,21 @@ class ConfigDialog(QtWidgets.QDialog):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
 
-        self._project_root = QtWidgets.QLineEdit()
-        self._project_root.setPlaceholderText(
+        self._bluesky_root = QtWidgets.QLineEdit()
+        self._bluesky_root.setPlaceholderText(
             "(auto-detect -- assumes B-PILOT is nested inside mpe_bluesky, as today)"
         )
-        self._project_root.setToolTip(
+        self._bluesky_root.setToolTip(
             "Optional: the real mpe_bluesky checkout, if B-PILOT itself isn't\n"
             "nested inside it. Must contain instrument/ plus blueskyStarter.sh\n"
             "or qserver.sh -- an invalid path is ignored (falls back to\n"
-            "auto-detect). Leave blank for the normal nested layout.\n"
-            "Takes effect on the next launch, not live."
+            "auto-detect, with a startup warning explaining why). Leave blank\n"
+            "for the normal nested layout. Takes effect on the next launch,\n"
+            "not live."
         )
-        grid.addWidget(S.LabelRight("Project root:"), 0, 0)
-        grid.addWidget(self._project_root, 0, 1)
-        grid.addWidget(self._browse_button(self._project_root), 0, 2)
+        grid.addWidget(S.LabelRight("Bluesky root:"), 0, 0)
+        grid.addWidget(self._bluesky_root, 0, 1)
+        grid.addWidget(self._browse_button(self._bluesky_root), 0, 2)
 
         self._plans_dir = QtWidgets.QLineEdit()
         self._plans_dir.setToolTip(
@@ -602,11 +603,11 @@ class ConfigDialog(QtWidgets.QDialog):
 
     def _add_device_path(self) -> None:
         chosen = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select device search directory", _paths.PROJECT_ROOT
+            self, "Select device search directory", _paths.BLUESKY_ROOT
         )
         if not chosen:
             return
-        rel = os.path.relpath(chosen, _paths.PROJECT_ROOT)
+        rel = os.path.relpath(chosen, _paths.BLUESKY_ROOT)
         value = rel if not rel.startswith("..") else chosen
         self._device_paths_widget.addItem(value)
         self._rebuild_device_list()
@@ -828,12 +829,12 @@ class ConfigDialog(QtWidgets.QDialog):
 
     def _add_plan_building_path(self) -> None:
         chosen, _filt = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select plan_opener/per_step/plan_closer file", _paths.PROJECT_ROOT,
+            self, "Select plan_opener/per_step/plan_closer file", _paths.BLUESKY_ROOT,
             "Python files (*.py)",
         )
         if not chosen:
             return
-        rel = os.path.relpath(chosen, _paths.PROJECT_ROOT)
+        rel = os.path.relpath(chosen, _paths.BLUESKY_ROOT)
         value = rel if not rel.startswith("..") else chosen
         self._plan_building_paths_widget.addItem(value)
         self._rebuild_scan_blocks()
@@ -845,11 +846,11 @@ class ConfigDialog(QtWidgets.QDialog):
 
     def _add_suspender_path(self) -> None:
         chosen, _filt = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select suspender file", _paths.PROJECT_ROOT, "Python files (*.py)",
+            self, "Select suspender file", _paths.BLUESKY_ROOT, "Python files (*.py)",
         )
         if not chosen:
             return
-        rel = os.path.relpath(chosen, _paths.PROJECT_ROOT)
+        rel = os.path.relpath(chosen, _paths.BLUESKY_ROOT)
         value = rel if not rel.startswith("..") else chosen
         self._suspender_paths_widget.addItem(value)
         self._rebuild_scan_blocks()
@@ -1149,7 +1150,7 @@ class ConfigDialog(QtWidgets.QDialog):
 
     def _load_from(self, cfg: dict) -> None:
         """Populate every tab's widgets from `cfg` (a full effective-config dict)."""
-        self._project_root.setText(cfg.get("project_root") or "")
+        self._bluesky_root.setText(cfg.get("bluesky_root") or "")
         self._plans_dir.setText(cfg["plans_dir"])
         self._import_root.setText(cfg["import_root"])
         self._default_file.setText(cfg["default_plan_file"])
@@ -1197,7 +1198,7 @@ class ConfigDialog(QtWidgets.QDialog):
     def values(self) -> dict:
         """Return the edited settings (all tabs) as a config dict."""
         return {
-            "project_root": self._project_root.text().strip(),
+            "bluesky_root": self._bluesky_root.text().strip(),
             "plans_dir": self._plans_dir.text().strip(),
             "import_root": self._import_root.text().strip(),
             "default_plan_file": self._default_file.text().strip(),

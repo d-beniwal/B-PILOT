@@ -26,10 +26,10 @@ from .run_controls import RunControlBar
 from .session_log import SessionLogView
 from .switchto_popup import SwitchToButton
 
-# Default work dir (kernel cwd): the project root, so a launched kernel's
+# Default work dir (kernel cwd): the Bluesky root, so a launched kernel's
 # ``from instrument.collection import *`` resolves regardless of where the GUI
 # was started from.  Editable in the toolbar.
-_DEFAULT_LAUNCH_DIR = paths.PROJECT_ROOT
+_DEFAULT_LAUNCH_DIR = paths.BLUESKY_ROOT
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -145,6 +145,20 @@ class MainWindow(QtWidgets.QMainWindow):
             "Pick a Launch mode → Launch IPython, then Run plans."
         )
         QtCore.QTimer.singleShot(0, self._refresh_attach_availability)
+        QtCore.QTimer.singleShot(0, self._check_bluesky_root_override)
+
+    def _check_bluesky_root_override(self) -> None:
+        error = paths.BLUESKY_ROOT_OVERRIDE_ERROR
+        if not error:
+            return
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Bluesky root not applied",
+            f"{error}\n\n"
+            f"Falling back to the auto-detected location:\n{paths.BLUESKY_ROOT}\n\n"
+            "Fix the \"Bluesky root\" path in Configuration → Paths, or "
+            "clear it to use auto-detection.",
+        )
 
     # ── Toolbar ───────────────────────────────────────────────────────────────
 
@@ -263,20 +277,20 @@ class MainWindow(QtWidgets.QMainWindow):
         old_scale = config.get("ui_scale")
         old_theme = config.get("theme")
         old_font = config.get("font_family")
-        old_project_root = config.get("project_root")
+        old_bluesky_root = config.get("bluesky_root")
         config.set_active_profile(name)
         self._apply_profile_change(f"Switched to profile '{name}'.")
         if (
             config.get("ui_scale") != old_scale
             or config.get("theme") != old_theme
             or config.get("font_family") != old_font
-            or config.get("project_root") != old_project_root
+            or config.get("bluesky_root") != old_bluesky_root
         ):
             QtWidgets.QMessageBox.information(
                 self,
                 "Restart required",
                 "Restart B-PILOT for the new profile's appearance and/or "
-                "project-location settings to take effect.",
+                "Bluesky-root settings to take effect.",
             )
 
     # ── Right panel: console + notes ────────────────────────────────────────────
@@ -431,7 +445,7 @@ class MainWindow(QtWidgets.QMainWindow):
         old_scale = config.get("ui_scale")
         old_theme = config.get("theme")
         old_font = config.get("font_family")
-        old_project_root = config.get("project_root")
+        old_bluesky_root = config.get("bluesky_root")
         dlg = ConfigDialog(self)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             # The dialog may have created/deleted/renamed profiles or
@@ -443,13 +457,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 config.get("ui_scale") != old_scale
                 or config.get("theme") != old_theme
                 or config.get("font_family") != old_font
-                or config.get("project_root") != old_project_root
+                or config.get("bluesky_root") != old_bluesky_root
             ):
                 QtWidgets.QMessageBox.information(
                     self,
                     "Restart required",
                     "Restart B-PILOT for the new appearance and/or "
-                    "project-location settings to take effect.",
+                    "Bluesky-root settings to take effect.",
                 )
 
     def _show_autopilot_diagnostics(self) -> None:

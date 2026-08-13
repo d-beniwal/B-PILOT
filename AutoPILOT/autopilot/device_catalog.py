@@ -54,7 +54,7 @@ class DeviceCatalog:
 
 def _module_relative_to_project(source_file: str) -> str:
     """``.../instrument/devices/s20ide_devices/s20ide_motors.py`` -> ``devices.s20ide_devices.s20ide_motors``."""
-    rel = os.path.relpath(source_file, bpilot_paths.PROJECT_ROOT)
+    rel = os.path.relpath(source_file, bpilot_paths.BLUESKY_ROOT)
     dotted = os.path.splitext(rel)[0].replace(os.sep, ".")
     return dotted.removeprefix("instrument.")
 

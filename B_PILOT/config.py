@@ -3,7 +3,7 @@
 Small, dependency-free settings store for things the user should be able to
 change without editing code:
 
-* **Location** — ``project_root``: an optional override pointing at the real
+* **Location** — ``bluesky_root``: an optional override pointing at the real
   ``mpe_bluesky`` checkout, so B-PILOT itself can be checked out anywhere
   rather than nested inside that tree. Empty (the default) means "auto-detect
   by walking up from B-PILOT's own location," i.e. today's behavior. Read
@@ -73,11 +73,11 @@ DEFAULTS: dict = {
     # nested inside the mpe_bluesky tree -- empty (the default) means "walk
     # up from B-PILOT's own location looking for instrument/ + a root script,
     # same as always." Read specially, and read-only, by paths.py at import
-    # time (paths._peek_project_root_override()) -- it duplicates a tiny,
+    # time (paths._resolve_bluesky_root_override()) -- it duplicates a tiny,
     # side-effect-free slice of this module's active-profile resolution
     # rather than importing it, since this module imports paths already.
     # Takes effect on next launch only, like theme/font/ui_scale below.
-    "project_root": "",
+    "bluesky_root": "",
     "plans_dir": _P.USER_DIR,
     "import_root": _P.SRC_DIR,
     "default_plan_file": _P.DEFAULT_PLAN_FILE,
@@ -176,11 +176,11 @@ DEFAULTS: dict = {
 # Keys that stay diff-only (omitted from a saved profile unless overridden),
 # even though every other key is written out in full. Three kinds: paths
 # derived from *this* GUI's own location (B_PILOT/paths.py), an explicit
-# override of that same location (project_root), and pure runtime state that
+# override of that same location (bluesky_root), and pure runtime state that
 # isn't really a "setting" at all -- all workstation-specific, so baking any
 # of them into a profile would break portability to another workstation.
 _WORKSTATION_KEYS = {
-    "project_root",
+    "bluesky_root",
     "plans_dir",
     "import_root",
     "embedded_starter_script",
@@ -273,6 +273,18 @@ def _migrate_legacy_if_needed() -> None:
     name = str(overrides.get("beamline") or "default")
     _write_json(_default_path(name), overrides)
     _write_json(CONFIG_PATH, {"active_profile": name})
+
+
+def _migrate_bluesky_root_key(raw: dict) -> dict:
+    """Back-compat for profiles saved before the ``project_root`` ->
+    ``bluesky_root`` rename (2026-08-14): honor the old key if the new one
+    isn't set. Read-only -- the file rewrites cleanly under the new key on
+    the next :func:`save` since :func:`_as_overrides` only ever emits
+    :data:`DEFAULTS` keys."""
+    if not raw.get("bluesky_root") and raw.get("project_root"):
+        raw = dict(raw)
+        raw["bluesky_root"] = raw["project_root"]
+    return raw
 
 
 def _ensure_active_profile() -> str:
@@ -377,7 +389,8 @@ def profile_values(name: str) -> dict:
     from ``default_config.json`` on first access."""
     _ensure_active(name)
     merged = dict(DEFAULTS)
-    merged.update({k: v for k, v in _read_json(_active_path(name)).items() if k in DEFAULTS})
+    raw = _migrate_bluesky_root_key(_read_json(_active_path(name)))
+    merged.update({k: v for k, v in raw.items() if k in DEFAULTS})
     return merged
 
 
@@ -385,7 +398,8 @@ def default_profile_values(name: str) -> dict:
     """Effective *default* (shared baseline) config for profile `name`,
     ignoring any local ``active_config.json`` overrides."""
     merged = dict(DEFAULTS)
-    merged.update({k: v for k, v in _read_json(_default_path(name)).items() if k in DEFAULTS})
+    raw = _migrate_bluesky_root_key(_read_json(_default_path(name)))
+    merged.update({k: v for k, v in raw.items() if k in DEFAULTS})
     return merged
 
 

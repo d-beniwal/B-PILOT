@@ -120,7 +120,7 @@ def refresh() -> None:
 
 def resolve_path(path: str) -> str:
     """Resolve a (possibly project-relative) device search path to an absolute one."""
-    return path if os.path.isabs(path) else os.path.join(_paths.PROJECT_ROOT, path)
+    return path if os.path.isabs(path) else os.path.join(_paths.BLUESKY_ROOT, path)
 
 
 def get_catalog(beamline: str | None = None, *, search_paths: list[str] | None = None) -> DeviceCatalog:
