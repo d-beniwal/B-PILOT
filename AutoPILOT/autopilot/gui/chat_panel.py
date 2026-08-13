@@ -1,12 +1,12 @@
 """B-PILOT chat dock: a natural-language front end over `autopilot.pipeline`.
 
-Embedded via a guarded import -- see `gui_qt/autopilot_bridge.py` in B-PILOT.
+Embedded via a guarded import -- see `B_PILOT/autopilot_bridge.py` in B-PILOT.
 The LLM call runs on a persistent background thread, mirroring
-`gui_qt/viewer.py`'s `_CatalogWorker` (the one background-worker pattern in
+`B_PILOT/viewer.py`'s `_CatalogWorker` (the one background-worker pattern in
 this codebase) -- it must never block the Qt event loop.
 
 Transcript bubbles and the input composer (`_ComposerBox`) reuse B-PILOT's
-own palette (`gui_qt/style.py`) via the same `ensure_bpilot_on_path()`
+own palette (`B_PILOT/style.py`) via the same `ensure_bpilot_on_path()`
 convention already used by `device_catalog.py`/`plan_context.py`, so the dock
 looks like part of the same application rather than a bolted-on widget.
 Font size, bubble/panel colors, model, temperature, and the debug raw-output
@@ -32,8 +32,8 @@ from .settings_dialog import AutoPilotSettingsDialog
 
 ensure_bpilot_on_path()
 
-from gui_qt import config as bpilot_config  # noqa: E402
-from gui_qt import style as bpilot_style  # noqa: E402
+from B_PILOT import config as bpilot_config  # noqa: E402
+from B_PILOT import style as bpilot_style  # noqa: E402
 
 
 class _ChatWorker(QtCore.QObject):

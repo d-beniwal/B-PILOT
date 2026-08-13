@@ -1,6 +1,6 @@
 """AutoPILOT settings dialog: model/behavior, appearance, and advanced Argo overrides.
 
-Mirrors B-PILOT's own `gui_qt/config_dialog.py` house style (card sections,
+Mirrors B-PILOT's own `B_PILOT/config_dialog.py` house style (card sections,
 Restore Defaults/Cancel/Save, values previewed in the form and only written
 on Save) but as AutoPILOT's own small dialog -- deliberately *not* hooked
 into B-PILOT's `config.py` profile system, which is per-beamline instrument
@@ -16,7 +16,7 @@ from . import themes
 
 ensure_bpilot_on_path()
 
-from gui_qt import style as bpilot_style  # noqa: E402
+from B_PILOT import style as bpilot_style  # noqa: E402
 
 # A short, curated starting list -- the combo is editable so any
 # Argo-supported model id can be typed directly.

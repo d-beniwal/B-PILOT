@@ -27,8 +27,8 @@ from ._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
 
-from gui_qt import paths as bpilot_paths  # noqa: E402
-from gui_qt import plan_parser as bpilot_plan_parser  # noqa: E402
+from B_PILOT import paths as bpilot_paths  # noqa: E402
+from B_PILOT import plan_parser as bpilot_plan_parser  # noqa: E402
 
 LIST_DEVICES_TOOL_NAME = "list_devices"
 LIST_PLANS_TOOL_NAME = "list_plans"
@@ -536,7 +536,7 @@ def build_list_directory_schema() -> dict:
             "the mpe_bluesky project (GUI code, instrument plans, docs, "
             "READMEs -- everything except a small denylist of sensitive "
             "files/dirs). Use this to orient yourself before searching or "
-            "reading, e.g. to see what's inside gui_qt/ or B-PILOT/documents/."
+            "reading, e.g. to see what's inside B_PILOT/ or B-PILOT/documents/."
         ),
         "input_schema": {
             "type": "object",
@@ -545,7 +545,7 @@ def build_list_directory_schema() -> dict:
                     "type": "string",
                     "description": (
                         "Directory path, relative to the mpe_bluesky project root "
-                        "(e.g. 'B-PILOT/gui_qt') or absolute. Omit to list the "
+                        "(e.g. 'B-PILOT/B_PILOT') or absolute. Omit to list the "
                         "project root itself."
                     ),
                 }
@@ -579,7 +579,7 @@ def build_search_codebase_schema() -> dict:
                 },
                 "path_prefix": {
                     "type": "string",
-                    "description": "Optional subtree to restrict the search to, e.g. 'B-PILOT/gui_qt'.",
+                    "description": "Optional subtree to restrict the search to, e.g. 'B-PILOT/B_PILOT'.",
                 },
                 "limit": {
                     "type": "integer",

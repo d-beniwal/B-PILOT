@@ -1,6 +1,6 @@
 """Bluesky data viewer — a standalone window that browses runs in the catalog.
 
-Launched as its OWN process (``python -m gui_qt.viewer``) so it stays open
+Launched as its OWN process (``python -m B_PILOT.viewer``) so it stays open
 independently of the plan-runner GUI.  Left panel = list of runs in the
 catalog; right panel = the selected run's information in human-readable form
 (summary, full metadata, data preview, files).
@@ -47,19 +47,19 @@ if __package__:
     from . import config as _config
     from . import databroker_access as _dba
     from . import style as S
-else:  # allow `python gui_qt/viewer.py`
+else:  # allow `python B_PILOT/viewer.py`
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from gui_qt import config as _config
-    from gui_qt import databroker_access as _dba
-    from gui_qt import style as S
+    from B_PILOT import config as _config
+    from B_PILOT import databroker_access as _dba
+    from B_PILOT import style as S
 
 _PAGE_SIZE = _dba.PAGE_SIZE  # runs fetched per page (catalogs can hold tens of thousands)
 
 
 # ── Catalog access ──────────────────────────────────────────────────────────────
-# Implementation lives in gui_qt/databroker_access.py (Qt-free, shared with
+# Implementation lives in B_PILOT/databroker_access.py (Qt-free, shared with
 # AutoPILOT's read-only data tools) -- re-exported here unchanged so this
-# file's own call sites (and anything importing gui_qt.viewer for these
+# file's own call sites (and anything importing B_PILOT.viewer for these
 # names) keep working as before.
 load_defaults = _dba.load_defaults
 connect_catalog = _dba.connect_catalog
@@ -256,7 +256,7 @@ _EXPORT_FIELD_LABELS = {
 class ExportConfigDialog(QtWidgets.QDialog):
     """Checkboxes controlling what "Export run…" writes out.
 
-    Persisted per-profile as `viewer_export_fields` (see gui_qt/config.py) —
+    Persisted per-profile as `viewer_export_fields` (see B_PILOT/config.py) —
     editable here only; nothing is written until Save.
     """
 

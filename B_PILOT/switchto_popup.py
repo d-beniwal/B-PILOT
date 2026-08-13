@@ -8,7 +8,7 @@ shortcut actually **runs and succeeds** in the kernel (via
 completion), never merely when it is queued and never when the command
 raises. Clicking it opens :class:`SwitchToPopup`, a
 ``Qt.Popup`` single-row picker — shortcut dropdown, per-shortcut param fields
-(:func:`gui_qt.param_form.build_row`), Notes, and Add-to-Queue/Run-in-console
+(:func:`B_PILOT.param_form.build_row`), Notes, and Add-to-Queue/Run-in-console
 buttons, any of which closes the popup. Discovery (``switch_to_*`` plans found
 via ``config.get("switch_to_search_paths")``) and command generation are
 carried over unchanged from the old panel.

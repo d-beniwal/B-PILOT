@@ -9,7 +9,7 @@ always knows where it lives and can map the rest of the project relative to that
 
 Two anchors:
 
-* **GUI bundle** — :data:`GUI_DIR` (the ``gui_qt`` package) and its parent
+* **GUI bundle** — :data:`GUI_DIR` (the ``B_PILOT`` package) and its parent
   :data:`BUNDLE_DIR`.  Files shipped *next to* the GUI (its config, the device
   manifest, the embedded-kernel starter) live here and travel with the GUI if
   the folder is relocated.
@@ -33,8 +33,8 @@ def _abs(*parts: str) -> str:
 
 
 # ── GUI bundle (relative to this file) ───────────────────────────────────────
-GUI_DIR = os.path.dirname(os.path.abspath(__file__))   # .../<bundle>/gui_qt
-BUNDLE_DIR = os.path.dirname(GUI_DIR)                   # parent of gui_qt (e.g. gui/)
+GUI_DIR = os.path.dirname(os.path.abspath(__file__))   # .../<bundle>/B_PILOT
+BUNDLE_DIR = os.path.dirname(GUI_DIR)                   # parent of B_PILOT (e.g. gui/)
 
 # Files shipped alongside the GUI package — they move *with* the GUI bundle:
 CONFIG_PATH = _abs(BUNDLE_DIR, "gui_config.json")  # tiny pointer: {"active_profile": name}
@@ -43,8 +43,8 @@ TEST_PLANS_DIR = _abs(BUNDLE_DIR, "test_plans")  # unused by default; kept for b
 EMBEDDED_STARTER = _abs(BUNDLE_DIR, "embedded_kernel_starter.sh")
 SESSION_RECORDER = _abs(GUI_DIR, "session_recorder.py")
 
-# Directory to put on sys.path so ``import gui_qt`` works when a module is run as
-# a plain script (``python gui_qt/app.py``) rather than ``python -m gui_qt``.
+# Directory to put on sys.path so ``import B_PILOT`` works when a module is run as
+# a plain script (``python B_PILOT/app.py``) rather than ``python -m B_PILOT``.
 PKG_PARENT = BUNDLE_DIR
 
 
@@ -58,7 +58,7 @@ def _find_project_root(start: str) -> str:
 
     A directory qualifies when it contains an ``instrument/`` subdirectory *and*
     at least one of the known root scripts.  Falls back to two levels above the
-    GUI (the ``<root>/B-PILOT/gui_qt`` layout) if no marker is found, so the GUI
+    GUI (the ``<root>/B-PILOT/B_PILOT`` layout) if no marker is found, so the GUI
     still works before the project is fully in place.
     """
     cur = start
@@ -71,7 +71,7 @@ def _find_project_root(start: str) -> str:
         if parent == cur:          # reached the filesystem root — stop
             break
         cur = parent
-    return os.path.dirname(BUNDLE_DIR)   # fallback: <root>/B-PILOT/gui_qt
+    return os.path.dirname(BUNDLE_DIR)   # fallback: <root>/B-PILOT/B_PILOT
 
 
 PROJECT_ROOT = _find_project_root(GUI_DIR)
@@ -103,7 +103,7 @@ SESSION_DIR_DEFAULT = os.path.expanduser("~/.bluesky_pilot")
 
 
 def ensure_on_syspath() -> None:
-    """Put :data:`PKG_PARENT` on ``sys.path`` so ``import gui_qt`` resolves.
+    """Put :data:`PKG_PARENT` on ``sys.path`` so ``import B_PILOT`` resolves.
 
     Safe to call from a script-mode entry point before the package is importable.
     """

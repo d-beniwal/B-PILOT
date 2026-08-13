@@ -18,7 +18,7 @@ Design (mirrors how ``qserver.sh`` keeps the queueserver in a screen session):
   on the connection file (the GUI then offers to *attach* instead); otherwise it
   cleans any stale session/file and starts fresh.
 
-No Qt here, so this doubles as a CLI:  ``python -m gui_qt.kernel_session
+No Qt here, so this doubles as a CLI:  ``python -m B_PILOT.kernel_session
 status|stop|launch [--beamline B]`` — a ``qserver.sh``-style handle for staff.
 """
 from __future__ import annotations

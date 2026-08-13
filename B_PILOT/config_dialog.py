@@ -988,7 +988,7 @@ class ConfigDialog(QtWidgets.QDialog):
         card.body.addLayout(grid)
         note = QtWidgets.QLabel(
             "These are starting defaults for the standalone Data Viewer window "
-            "(python -m gui_qt.viewer) — still editable there per-session."
+            "(python -m B_PILOT.viewer) — still editable there per-session."
         )
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {S.MUTED};")

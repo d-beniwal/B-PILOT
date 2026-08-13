@@ -1,9 +1,9 @@
 """Shared dtype-aware parameter-form widget building, validation, and parsing.
 
-Extracted out of :class:`gui_qt.plan_runner.PlanRunnerPanel` so any panel that
+Extracted out of :class:`B_PILOT.plan_runner.PlanRunnerPanel` so any panel that
 needs a docstring-driven parameter form (the plan runner's ordinary — i.e.
-non-skeleton — fields, and the compact popups in :mod:`gui_qt.switchto_popup`
-/ :mod:`gui_qt.contacq_popup`) can build one from a plain ``list[ParamSpec]``
+non-skeleton — fields, and the compact popups in :mod:`B_PILOT.switchto_popup`
+/ :mod:`B_PILOT.contacq_popup`) can build one from a plain ``list[ParamSpec]``
 without duplicating the per-dtype widget logic. :func:`build_grid` lays
 params out in a vertical :class:`QGridLayout`; :func:`build_row` lays them
 out left-to-right in a :class:`QHBoxLayout` for single-row popups. Callers
@@ -310,7 +310,7 @@ def parse_values(
     """Extract `{name: value}` from `widgets` (as built by :func:`build_grid`),
     plus a list of validation error strings. `value` is a raw Python value
     (str/int/float/bool/list of tuples) or a :class:`RawCode` for
-    device/block refs, which :func:`gui_qt.command_builder.make_re_line`
+    device/block refs, which :func:`B_PILOT.command_builder.make_re_line`
     emits unquoted."""
     values: dict = {}
     errors: list[str] = []

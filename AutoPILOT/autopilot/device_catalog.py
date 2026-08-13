@@ -1,7 +1,7 @@
 """Per-profile device lookup, reusing B-PILOT's Qt-free device discovery.
 
-Wraps ``gui_qt.device_discovery.scan()`` directly (rather than
-``gui_qt.device_source.get_catalog()``) because the plan renderer needs each
+Wraps ``B_PILOT.device_discovery.scan()`` directly (rather than
+``B_PILOT.device_source.get_catalog()``) because the plan renderer needs each
 device's ``source_file`` to build the right relative import
 (``from ..devices.<beamline>_devices.<file> import <name>``), which
 ``get_catalog()`` discards after filtering.
@@ -15,11 +15,11 @@ from ._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
 
-from gui_qt import axis_discovery as bpilot_axis_discovery  # noqa: E402
-from gui_qt import config as bpilot_config  # noqa: E402
-from gui_qt import device_discovery as bpilot_device_discovery  # noqa: E402
-from gui_qt import device_source as bpilot_device_source  # noqa: E402
-from gui_qt import paths as bpilot_paths  # noqa: E402
+from B_PILOT import axis_discovery as bpilot_axis_discovery  # noqa: E402
+from B_PILOT import config as bpilot_config  # noqa: E402
+from B_PILOT import device_discovery as bpilot_device_discovery  # noqa: E402
+from B_PILOT import device_source as bpilot_device_source  # noqa: E402
+from B_PILOT import paths as bpilot_paths  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class DeviceCatalog:
     beamline: str
     by_category: dict[str, list[str]]
     import_module_by_name: dict[str, str]  # device name -> dotted module, relative to instrument/plans/
-    axes: dict[str, list[str]]  # motor device name -> scannable axis names (see gui_qt/axis_discovery.py)
+    axes: dict[str, list[str]]  # motor device name -> scannable axis names (see B_PILOT/axis_discovery.py)
 
     def names_for(self, category: str) -> list[str]:
         return list(self.by_category.get(category, []))
@@ -46,7 +46,7 @@ class DeviceCatalog:
 
         An empty list means the device is itself settable (e.g. a bare
         ``EpicsMotor``) -- callers then use the bare device name rather than
-        ``device.axis``. Mirrors ``gui_qt/device_source.py``'s
+        ``device.axis``. Mirrors ``B_PILOT/device_source.py``'s
         ``DeviceCatalog.axes_for``.
         """
         return list(self.axes.get(name, []))
@@ -82,7 +82,7 @@ def load(profile: str | None = None) -> DeviceCatalog:
 
     # Axes are a structural property of the same source files -- scanned
     # fresh here (never persisted), same AST-only guarantee as the device
-    # scan above. Mirrors gui_qt/device_source.py's get_catalog().
+    # scan above. Mirrors B_PILOT/device_source.py's get_catalog().
     axes = bpilot_axis_discovery.scan(resolved_paths)
 
     return DeviceCatalog(

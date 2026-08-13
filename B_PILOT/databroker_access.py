@@ -1,4 +1,4 @@
-"""Qt-free databroker/catalog access shared by :mod:`gui_qt.viewer` (the
+"""Qt-free databroker/catalog access shared by :mod:`B_PILOT.viewer` (the
 human-facing "Open Bluesky Viewer" window) and AutoPILOT's read-only data
 tools (``AutoPILOT/autopilot/data_catalog.py``).
 
@@ -8,7 +8,7 @@ logic without pulling in a Qt dependency just to search/describe runs.
 
 Callers are responsible for their own ``socket.setdefaulttimeout(...)``
 guard against pymongo's lack of a default *read* timeout (see
-``gui_qt/viewer.py``'s module docstring for the original rationale) --
+``B_PILOT/viewer.py``'s module docstring for the original rationale) --
 that is a process-wide side effect this module deliberately does not apply
 on import, since it's used from two very different process contexts (the
 viewer's own standalone process vs. AutoPILOT running in-process inside the

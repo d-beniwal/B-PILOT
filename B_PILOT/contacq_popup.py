@@ -4,7 +4,7 @@
 living in the status bar above the console. The instrument keeps no
 persistent cont_acq state itself (`instrument/plans/scans_stationary.py`'s
 `stop_cont_acq` checks `det.cam.acquire` live), so the button polls every
-known area detector on a timer, mirroring `gui_qt.mode_buttons.ModeButtonBar`.
+known area detector on a timer, mirroring `B_PILOT.mode_buttons.ModeButtonBar`.
 Green + one line per detector while any are acquiring; gray + "—" when none
 are. Clicking it opens :class:`ContAcqPopup`, a `Qt.Popup` with a "start a new
 detector" row (console-only, no queue option per spec) and a red "x" per

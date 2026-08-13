@@ -15,7 +15,7 @@ time.
 
 - **Docstring-driven parameter forms** — no plan-specific GUI code to write.
   Document a plan's arguments in a small NumPy-style `Parameters` grammar
-  (see `gui_qt/plan_parser.py`) and B-PILOT builds a typed form for it
+  (see `B_PILOT/plan_parser.py`) and B-PILOT builds a typed form for it
   automatically: text/number fields with live validation, dropdowns for
   `choice{...}` options, and device pickers for `device{category}` /
   `device_list{category}` arguments. Plan files are read with `ast` only —
@@ -56,7 +56,7 @@ and `instrument.collection` actually run under) rather than
 `bpilot_mpe_dev`, it's missing one package the GUI needs:
 
 - **`qtconsole`** (pulls in `QtPy`) — powers the embedded IPython console
-  (`gui_qt/console_panel.py`). `environment_2024_1.yml` only installs
+  (`B_PILOT/console_panel.py`). `environment_2024_1.yml` only installs
   `pyqt =5` / `qt =5`, and nothing else in that env depends on `qtconsole`,
   so it has to be added explicitly, e.g. `pip install qtconsole`.
 
@@ -76,7 +76,7 @@ python launch.py
 equivalently:
 
 ```bash
-python -m gui_qt
+python -m B_PILOT
 ```
 
 ## Where it needs to live
@@ -84,7 +84,7 @@ python -m gui_qt
 B-PILOT auto-discovers the Bluesky instrument package it belongs to by
 walking **up** from its own location looking for an `instrument/` directory
 alongside a `blueskyStarter.sh` or `qserver.sh` script (see
-`gui_qt/paths.py`). That means B-PILOT should sit as a subfolder directly
+`B_PILOT/paths.py`). That means B-PILOT should sit as a subfolder directly
 inside a beamline's Bluesky project root, e.g.:
 
 ```
@@ -93,7 +93,7 @@ inside a beamline's Bluesky project root, e.g.:
 ├── blueskyStarter.sh (or qserver.sh)
 └── B-PILOT/            <- this repo
     ├── launch.py
-    └── gui_qt/
+    └── B_PILOT/
 ```
 
 Everything else (which directory holds plans, where the device manifest is,
@@ -126,7 +126,7 @@ attach to it from any terminal or `screen` session, independent of the GUI
 survives GUI exit).
 
 Each beamline's kernel keeps its connection file at a fixed, predictable path
-(`gui_qt/kernel_session.py`):
+(`B_PILOT/kernel_session.py`):
 
 ```
 <session_dir>/<beamline>/kernel.json      # default session_dir: ~/.bluesky_pilot
@@ -177,7 +177,7 @@ the profile's `default_config.json`). Device names for the
 longer a hand-maintained manifest: the Devices tab's **Discover** button
 statically scans a profile's configured search path(s) for `__all__`-exported
 names (never imports, never touches EPICS) and infers a category from the
-source filename (see `gui_qt/device_discovery.py`). A new beamline is
+source filename (see `B_PILOT/device_discovery.py`). A new beamline is
 onboarded by creating a profile, pointing its device search paths at that
 beamline's `instrument/devices/<bl>_devices/` directory, and clicking
 Discover.

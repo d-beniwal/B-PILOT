@@ -1,6 +1,6 @@
 """Read-only lookups over a beamline's recorded runs, for AutoPILOT's data tools.
 
-Reuses B-PILOT's Qt-free ``gui_qt.databroker_access`` (the same databroker
+Reuses B-PILOT's Qt-free ``B_PILOT.databroker_access`` (the same databroker
 access logic behind the "Open Bluesky Viewer" window) rather than
 reimplementing catalog/Mongo access. Catalog access always goes through the
 active profile's configured **catalog name** (``databroker_catalog``) --
@@ -10,7 +10,7 @@ directly (that file holds live plaintext MongoDB credentials; see
 applied to plan files).
 
 Every public function returns a plain JSON-safe dict and never raises --
-mirrors ``gui_qt.databroker_access.connect_catalog``'s tolerant-of-failure
+mirrors ``B_PILOT.databroker_access.connect_catalog``'s tolerant-of-failure
 convention, since these are called directly as LLM tool results.
 
 Connections are cached at module level, keyed by (catalog, uri). This is
@@ -19,7 +19,7 @@ here -- is always invoked from ``autopilot/gui/chat_panel.py``'s
 ``_ChatWorker``, a single persistent daemon thread started once per chat
 dock and never re-created (some databroker/intake backends bind internal
 state to whichever thread first touches them -- the same invariant
-``gui_qt/viewer.py``'s ``_CatalogWorker`` documents and relies on). If a
+``B_PILOT/viewer.py``'s ``_CatalogWorker`` documents and relies on). If a
 second concurrent caller of this module is ever introduced, this cache
 needs a lock or a per-thread scope.
 """
@@ -33,8 +33,8 @@ from ._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
 
-from gui_qt import config as bpilot_config  # noqa: E402
-from gui_qt import databroker_access as bpilot_data  # noqa: E402
+from B_PILOT import config as bpilot_config  # noqa: E402
+from B_PILOT import databroker_access as bpilot_data  # noqa: E402
 
 # Fields present on real hexm_test start docs that are either large, noisy,
 # or internal-only -- not useful to an LLM answering questions about a run
@@ -49,7 +49,7 @@ _MIN_LIMIT, _MAX_LIMIT, _DEFAULT_LIMIT = 1, 100, 20
 _MAX_COLUMNS = 60
 
 # Fetching per-run metadata is one Mongo round-trip per uid (see
-# gui_qt/databroker_access.py's page_from_uids docstring) -- fine for a
+# B_PILOT/databroker_access.py's page_from_uids docstring) -- fine for a
 # ~100-run local test catalog, but scanning an entire real beamline catalog
 # (which can hold tens of thousands of runs) on first use would block the
 # single chat-worker thread for a long time with no progress indication.
@@ -69,8 +69,8 @@ def _ensure_socket_timeout() -> None:
 
     pymongo has no default *read* timeout, so a server that accepts a
     connection and then stops responding mid-query blocks forever with no
-    exception raised (see ``gui_qt/databroker_access.py``'s module
-    docstring). ``gui_qt/viewer.py`` sets this globally at import time
+    exception raised (see ``B_PILOT/databroker_access.py``'s module
+    docstring). ``B_PILOT/viewer.py`` sets this globally at import time
     because it always runs as its own process; AutoPILOT instead runs
     in-process inside the main B-PILOT GUI, so this is applied lazily --
     only if/when a data tool is actually used -- rather than unconditionally

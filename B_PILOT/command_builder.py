@@ -1,7 +1,7 @@
 """Compose the two-line ``from ... import ...`` + ``RE(plan(...))`` command
-string queued/run by :class:`gui_qt.plan_runner.PlanRunnerPanel`,
-:class:`gui_qt.switchto_popup.SwitchToPopup`, and
-:class:`gui_qt.contacq_popup.ContAcqPopup`.
+string queued/run by :class:`B_PILOT.plan_runner.PlanRunnerPanel`,
+:class:`B_PILOT.switchto_popup.SwitchToPopup`, and
+:class:`B_PILOT.contacq_popup.ContAcqPopup`.
 
 Extracted out of `PlanRunnerPanel` so both panels build commands the same
 way; `plan_name`/`module`/`params` are passed explicitly instead of being

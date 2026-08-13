@@ -6,7 +6,7 @@ The docstring grammar (``GRAMMAR`` below) is deliberately hand-written, not
 derived at runtime -- it changes rarely and costs real tokens every session.
 
 The template registry (``TEMPLATES``), however, IS derived at import time
-from ``gui_qt.plan_parser.find_plan_specs()`` over every plan function in
+from ``B_PILOT.plan_parser.find_plan_specs()`` over every plan function in
 ``scan_skeletons.py`` / ``scans_standard.py`` / ``scans_stationary.py`` --
 the same three files, and the same parser, B-PILOT's own plan-runner form
 uses. This keeps AutoPILOT's drafting scope exactly in sync with what a
@@ -28,10 +28,10 @@ from ._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
 
-from gui_qt import paths as bpilot_paths  # noqa: E402
-from gui_qt.plan_parser import ParamSpec, find_plan_specs  # noqa: E402  (reused, not reinvented)
+from B_PILOT import paths as bpilot_paths  # noqa: E402
+from B_PILOT.plan_parser import ParamSpec, find_plan_specs  # noqa: E402  (reused, not reinvented)
 
-# ── Docstring grammar (verbatim summary of gui_qt/plan_parser.py's own docstring) ──
+# ── Docstring grammar (verbatim summary of B_PILOT/plan_parser.py's own docstring) ──
 
 GRAMMAR = """\
 Every generated plan function must document its parameters in this exact
@@ -94,14 +94,14 @@ class Template:
     param_specs: tuple[ParamSpec, ...]
     wrapper_name_hint: str  # slug used to name the generated function/file
     # When set, this template's param names line up with a REAL plan already
-    # documented for B-PILOT's own form (see gui_qt/plan_parser.py's grammar),
+    # documented for B-PILOT's own form (see B_PILOT/plan_parser.py's grammar),
     # so a validated request can drive that form directly via
     # PlanRunnerPanel.load_from_command() instead of writing a draft file --
     # see plan_renderer.render_command() / pipeline.converse(). None means
     # "not yet drivable" (no dynamically-built template leaves this unset).
     gui_plan_name: str | None = None
     gui_plan_file: str | None = None  # file to check in B-PILOT's file browser
-    # (shape, relative) from gui_qt.plan_parser.SKELETON_SHAPES when this
+    # (shape, relative) from B_PILOT.plan_parser.SKELETON_SHAPES when this
     # plan takes its motor(s)/position(s) through a bare *args -- see
     # plan_spec.py's `axes` handling and plan_renderer.py's positional-token
     # rendering. None for every ordinary keyword-only plan.

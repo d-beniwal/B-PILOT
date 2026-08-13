@@ -1,4 +1,4 @@
-"""Puts B-PILOT's ``gui_qt`` package on ``sys.path`` so AutoPILOT can reuse its
+"""Puts B-PILOT's ``B_PILOT`` package on ``sys.path`` so AutoPILOT can reuse its
 Qt-free backend modules (``config``, ``device_discovery``, ``device_source``,
 ``plan_parser``, ``databroker_access``) directly instead of re-implementing them.
 
@@ -16,6 +16,6 @@ BPILOT_DIR = os.path.dirname(_AUTOPILOT_DIR)
 
 
 def ensure_bpilot_on_path() -> None:
-    """Idempotently add B-PILOT's directory to ``sys.path`` (for ``import gui_qt...``)."""
+    """Idempotently add B-PILOT's directory to ``sys.path`` (for ``import B_PILOT...``)."""
     if BPILOT_DIR not in sys.path:
         sys.path.insert(0, BPILOT_DIR)

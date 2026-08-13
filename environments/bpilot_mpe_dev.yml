@@ -143,6 +143,6 @@ dependencies:
       - xraydb==4.5.8
       - GitPython==3.1.45
 
-      # --- AutoPILOT chat dock (optional; gui_qt/autopilot_bridge.py
+      # --- AutoPILOT chat dock (optional; B_PILOT/autopilot_bridge.py
       # --- degrades gracefully if this isn't installed) --------------------
       - anthropic==0.118.0

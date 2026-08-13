@@ -1,7 +1,7 @@
 """Switchable color themes for the AutoPILOT chat dock.
 
 Unlike the rest of `autopilot/gui/`, this module intentionally does NOT
-reuse `gui_qt.style` colors for its non-`classic` presets -- the whole
+reuse `B_PILOT.style` colors for its non-`classic` presets -- the whole
 point of a theme here is to look distinct from (and deliberately contrast
 with) B-PILOT's own light theme, so the dock reads as an AI layer rather
 than blending into the host window. `classic` is the one preset that
@@ -11,7 +11,7 @@ blend-in look back.
 `build_dock_stylesheet()` returns a stylesheet scoped to
 `QDockWidget#AutoPILOTChatDock` (the objectName set in `chat_panel.py`) so
 it overrides B-PILOT's app-wide stylesheet for exactly this dock and its
-children, without touching `gui_qt/style.py` or any global Qt state.
+children, without touching `B_PILOT/style.py` or any global Qt state.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
 
-from gui_qt import style as bpilot_style  # noqa: E402
+from B_PILOT import style as bpilot_style  # noqa: E402
 
 
 @dataclass(frozen=True)

@@ -109,7 +109,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ribbon.register_tab("viewer", "Data Viewer", self._toggle_viewer)
 
         # AutoPILOT chat dock: created once, right here, whenever AutoPILOT/
-        # is present and importable (see gui_qt/autopilot_bridge.py) -- its
+        # is present and importable (see B_PILOT/autopilot_bridge.py) -- its
         # ribbon tab and menu checkbox thereafter only toggle *visibility*,
         # never existence, so the tab is always there per the ribbon's
         # permanent-tab design (see panel_ribbon.py). When AutoPILOT isn't
@@ -364,7 +364,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console.run_code(f"{startup}\n{command}" if startup else command)
         # Only trigger the MIDAS_GUI live-view bridge for dispatches that
         # came from the plan-form panel itself, not the SwitchTo popup
-        # (out of scope for v1 — see gui_qt/midas_bridge.py's plan notes).
+        # (out of scope for v1 — see B_PILOT/midas_bridge.py's plan notes).
         if self.sender() is self.runner:
             midas_bridge.notify_interactive(
                 self.console,
@@ -589,7 +589,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "A Bluesky kernel is already running for this beamline — only one is "
             f"allowed at a time.\n\n{detail}\n\nAttach to it instead?\n\n"
             "(To stop it: Console → Shut down kernel, or run\n"
-            f"  python -m gui_qt.kernel_session stop --beamline "
+            f"  python -m B_PILOT.kernel_session stop --beamline "
             f"{info.get('beamline', '')})",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.Yes,
@@ -814,7 +814,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_toolbar_status("Viewer already running — look for its window.")
             return
         ok, pid = QtCore.QProcess.startDetached(
-            sys.executable, ["-m", "gui_qt.viewer"], paths.PKG_PARENT
+            sys.executable, ["-m", "B_PILOT.viewer"], paths.PKG_PARENT
         )
         if not ok:
             self._set_toolbar_status("Could not launch the viewer.", error=True)

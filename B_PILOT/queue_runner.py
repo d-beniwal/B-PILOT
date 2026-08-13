@@ -16,7 +16,7 @@ status updates **independently of the GUI** (even while it is detached/closed).
 No Qt, with one narrow exception: a `QCoreApplication` instance (no event
 loop entered) is created so `midas_bridge`'s `QLocalSocket` blocking calls
 work when a queued item has an area_detector device and the MIDAS_GUI
-bridge is enabled.  Run: ``python -m gui_qt.queue_runner [<beamline>]``.
+bridge is enabled.  Run: ``python -m B_PILOT.queue_runner [<beamline>]``.
 """
 from __future__ import annotations
 

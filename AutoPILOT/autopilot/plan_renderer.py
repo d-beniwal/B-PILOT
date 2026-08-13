@@ -91,7 +91,7 @@ def _device_names_used(template: Template, clean: dict) -> list[str]:
 def _axes_tokens(template: Template, clean: dict) -> list[str]:
     """Flatten ``clean["__axes__"]`` (see plan_spec.py's `_validate_axes_item`)
     into positional ``RE(...)`` tokens, mirroring
-    gui_qt/skeleton_widgets.py's ``_MotorRow.tokens()``/``MotorRowsWidget``
+    B_PILOT/skeleton_widgets.py's ``_MotorRow.tokens()``/``MotorRowsWidget``
     row-by-row concatenation: one motor token followed by that shape's
     position tokens, repeated per row, with no separator between rows.
     """
@@ -120,7 +120,7 @@ def render_command(template: Template, clean: dict) -> str:
     When ``template.skeleton`` is set (the six scan_skeletons.py plans), the
     motor(s)/position(s) are a bare positional ``*args`` prefix rather than
     ParamSpec-backed keywords -- see ``_apply_skeleton_args()`` in
-    gui_qt/plan_runner.py, which expects to find them first and chunk them by
+    B_PILOT/plan_runner.py, which expects to find them first and chunk them by
     row width.
     """
     args = [f"{spec.name}={_default_code(spec, clean.get(spec.name))}" for spec in template.param_specs]

@@ -60,7 +60,7 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     def __init__(self, parent=None, *, ribbon=None) -> None:
         """Build the panel and populate the file browser + plan dropdown.
 
-        `ribbon` (a :class:`gui_qt.panel_ribbon.PanelRibbon`), if given, wires
+        `ribbon` (a :class:`B_PILOT.panel_ribbon.PanelRibbon`), if given, wires
         a minimize button onto the file-browser and plan-form panels so they
         can be tucked into the main window's left-edge ribbon. Omitted in
         contexts that don't have one (there are none today, but keeps this

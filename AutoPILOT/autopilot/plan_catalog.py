@@ -35,9 +35,9 @@ from ._bpilot_path import ensure_bpilot_on_path
 
 ensure_bpilot_on_path()
 
-from gui_qt import config as bpilot_config  # noqa: E402
-from gui_qt import paths as bpilot_paths  # noqa: E402
-from gui_qt import plan_parser as bpilot_plan_parser  # noqa: E402
+from B_PILOT import config as bpilot_config  # noqa: E402
+from B_PILOT import paths as bpilot_paths  # noqa: E402
+from B_PILOT import plan_parser as bpilot_plan_parser  # noqa: E402
 
 Tier = Literal["vetted", "extended"]
 
@@ -64,7 +64,7 @@ _EXTENDED_SHARED_FILES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class PlanParam:
-    """JSON-safe mirror of one gui_qt.plan_parser.ParamSpec."""
+    """JSON-safe mirror of one B_PILOT.plan_parser.ParamSpec."""
 
     name: str
     dtype: str

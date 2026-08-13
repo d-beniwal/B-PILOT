@@ -318,7 +318,7 @@ class ConsolePanel(QtWidgets.QWidget):
         pkg_parent = paths.PKG_PARENT
         try:
             subprocess.Popen(
-                [sys.executable, "-m", "gui_qt.queue_runner", config.get("beamline")],
+                [sys.executable, "-m", "B_PILOT.queue_runner", config.get("beamline")],
                 cwd=pkg_parent,
                 start_new_session=True,
                 stdin=subprocess.DEVNULL,

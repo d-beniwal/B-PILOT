@@ -40,7 +40,7 @@ from collections import namedtuple
 from . import paths as _paths
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-# All path anchors live in :mod:`gui_qt.paths` (derived from the GUI's own
+# All path anchors live in :mod:`B_PILOT.paths` (derived from the GUI's own
 # location, so they stay correct across machines).  USER_DIR points at the real
 # MPE plan directory (``instrument/plans/``); which of its files actually show
 # up as rows in the plan-runner's file browser is controlled by the
@@ -100,7 +100,7 @@ _KNOWN_DTYPES = {
 # the codebase, this is an explicit, hand-maintained allowlist: plan name -> (shape,
 # relative).  `shape`'s *args token-count-per-row (2/2/3/4) matches
 # `scan_skeletons.check_num_args(args, N)` exactly, and drives which fields
-# `gui_qt/skeleton_widgets.MotorRowsWidget` renders per motor row:
+# `B_PILOT/skeleton_widgets.MotorRowsWidget` renders per motor row:
 #   "list"      -> motor, [p1, p2, ...]           (one explicit position list)
 #   "list_grid" -> motor, [p1, p2, ...]            (grid/outer-product version)
 #   "step"      -> motor, start, stop              (shared `nsteps` kwarg elsewhere)

@@ -7,11 +7,11 @@ Run it (from the ``B-PILOT/`` directory) via the top-level launcher::
 
 or as a module::
 
-    python -m gui_qt
+    python -m B_PILOT
 
 or directly::
 
-    python gui_qt/app.py
+    python B_PILOT/app.py
 """
 from __future__ import annotations
 
@@ -74,16 +74,16 @@ def main() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     app.setApplicationName("MPE Plan Runner")
 
-    # Support both `python -m gui_qt` (package) and `python app.py` (script).
+    # Support both `python -m B_PILOT` (package) and `python app.py` (script).
     if __package__:
         from . import config
         from . import style as S
         from .main_window import MainWindow
     else:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from gui_qt import config
-        from gui_qt import style as S
-        from gui_qt.main_window import MainWindow
+        from B_PILOT import config
+        from B_PILOT import style as S
+        from B_PILOT.main_window import MainWindow
 
     S.set_scale(config.get("ui_scale"))
     S.apply_theme(app, config.get("theme"), config.get("font_family"))

@@ -7,7 +7,7 @@ copied in so this GUI does not depend on the midas package.
 
 :func:`apply_theme` resolves the chosen theme and rebinds every existing
 module-level color constant (``BG``, ``ACCENT``, ``MUTED``, ...) to that
-theme's values, so the many call sites across ``gui_qt/`` that already read
+theme's values, so the many call sites across ``B_PILOT/`` that already read
 ``style.MUTED`` / ``style.ACCENT`` / etc. pick up the active theme without
 any change. It must run once at startup, before any widget is built (see
 ``config`` key ``"theme"``) — not live-updatable mid-session, same
@@ -29,7 +29,7 @@ from PyQt5 import QtWidgets
 
 @dataclass(frozen=True)
 class Theme:
-    """One named color palette. Every hardcoded color anywhere in gui_qt/
+    """One named color palette. Every hardcoded color anywhere in B_PILOT/
     (the base QSS below, plus the small "shadow palettes" in
     mode_buttons.py/run_controls.py/queue_panel.py/config_dialog.py) should
     trace back to a field here so switching themes actually changes it."""
@@ -286,7 +286,7 @@ FONT_FAMILY_CSS = resolve_font(DEFAULT_FONT_KEY)
 def _rebind_globals(theme: Theme) -> None:
     """Rebind every module-level color constant to `theme`'s values.
 
-    Lets every existing ``style.ATTR``/``S.ATTR`` call site across gui_qt/
+    Lets every existing ``style.ATTR``/``S.ATTR`` call site across B_PILOT/
     keep working unchanged when the active theme changes — they read the
     module attribute at call time, and widget construction always happens
     after :func:`apply_theme` has run (see the module docstring).

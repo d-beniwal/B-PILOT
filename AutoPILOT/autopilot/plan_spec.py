@@ -14,17 +14,17 @@ Three dtypes need more than a plain scalar/array JSON type:
   per_step/plan_closer/suspender/pseudo_suspender). Enum-restricted to the
   profile's `blocks[category]` list, and -- unlike an ordinary optional
   field -- always forced required: B-PILOT's own GUI treats a blank block
-  field as having no working fallback (see gui_qt/plan_runner.py's
+  field as having no working fallback (see B_PILOT/plan_runner.py's
   `_field_error`/`_parse_params`), regardless of what the real function
   signature's own default says.
 * ``device``/``device_list`` with ``category == "motor"`` -- in this
   codebase a motor is almost never itself settable (see
-  gui_qt/axis_discovery.py's module docstring): a plan needs ``motor.axis``,
+  B_PILOT/axis_discovery.py's module docstring): a plan needs ``motor.axis``,
   not the bare device name. The device name field stays a plain string (or
   list of strings) exactly like any other device field; a sibling
   ``<name>_axis`` (or ``<name>_axes`` for device_list) field lets the model
   supply the axis when the chosen motor has more than one. Mirrors
-  gui_qt/skeleton_widgets.py's `MotorAxisPicker` three-way logic (0 axes:
+  B_PILOT/skeleton_widgets.py's `MotorAxisPicker` three-way logic (0 axes:
   bare name; 1 axis: auto-resolve; >1: axis required). Exception:
   ``device{motor:whole}`` (``spec.motor_whole``) means the plan wants the
   bare multi-axis device itself (it indexes sub-axes internally) -- no
@@ -32,7 +32,7 @@ Three dtypes need more than a plain scalar/array JSON type:
   through, unresolved.
 * ``axes`` -- only present when `template.skeleton` is set (the six
   scan_skeletons.py plans, whose motor(s)/position(s) are a bare `*args`
-  that never becomes a ParamSpec at all -- see gui_qt/plan_parser.py's
+  that never becomes a ParamSpec at all -- see B_PILOT/plan_parser.py's
   `SKELETON_SHAPES`). An array of per-motor rows, shaped by
   `template.skeleton`'s shape, validated into `clean["__axes__"]` for
   `plan_renderer.render_command` to flatten into positional tokens.
@@ -219,7 +219,7 @@ class ValidationError(Exception):
 def _resolve_motor_token(
     label: str, motor: str, requested_axis: str | None, catalog: DeviceCatalog, errors: list[str]
 ) -> str | None:
-    """``motor`` or ``motor.axis`` (see gui_qt/skeleton_widgets.py's
+    """``motor`` or ``motor.axis`` (see B_PILOT/skeleton_widgets.py's
     `MotorAxisPicker.token()`/`.error()`, mirrored here), or None (with an
     error appended) when the axis can't be resolved."""
     axes = catalog.axes_for(motor)

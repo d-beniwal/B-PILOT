@@ -96,13 +96,13 @@ DEFAULTS: dict = {
     # UI font family (see style.FONT_STACKS), independent of the color theme.
     # Takes effect on the next launch, not live -- same as ui_scale.
     "font_family": "system",
-    # Optional AutoPILOT chat dock (../AutoPILOT, see gui_qt/autopilot_bridge.py).
+    # Optional AutoPILOT chat dock (../AutoPILOT, see B_PILOT/autopilot_bridge.py).
     # Off by default -- it's an add-on AI layer, not core B-PILOT -- toggled
     # from Configuration -> Appearance. Has no effect if AutoPILOT/ isn't
     # present or its deps aren't installed (autopilot_bridge.AVAILABLE).
     "autopilot_enabled": False,
     # Auto-start MIDAS_GUI's live view when a Run/Queue dispatch involves an
-    # area_detector device (see gui_qt/midas_bridge.py). On by default -- a
+    # area_detector device (see B_PILOT/midas_bridge.py). On by default -- a
     # no-op if MIDAS_GUI isn't running; never auto-launches it. Toggled from
     # the toolbar's "Bridge Live-View" checkbox or Configuration -> Data Viewer.
     "midas_bridge_enabled": True,
@@ -133,7 +133,7 @@ DEFAULTS: dict = {
     # rarely, so the catalog itself is committed (like device_selection) and
     # only refreshed via Configuration -> Scan blocks -> Discover, then Save.
     "plan_building_blocks": {},
-    # Data viewer (gui_qt/viewer.py). `databroker_catalog` is a NAME registered
+    # Data viewer (B_PILOT/viewer.py). `databroker_catalog` is a NAME registered
     # in ~/.local/share/intake/*.yml — never a credentialed connection string.
     # Empty means "auto-detect from instrument/iconfig.yml by account", the
     # viewer's original zero-config behavior.
@@ -161,7 +161,7 @@ DEFAULTS: dict = {
 
 # Keys that stay diff-only (omitted from a saved profile unless overridden),
 # even though every other key is written out in full. Two kinds: paths
-# derived from *this* GUI's own location (gui_qt/paths.py) — baking them into
+# derived from *this* GUI's own location (B_PILOT/paths.py) — baking them into
 # a profile would break portability to another workstation — and pure
 # runtime state that isn't really a "setting" at all.
 _WORKSTATION_KEYS = {
