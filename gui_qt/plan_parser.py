@@ -503,6 +503,26 @@ def file_to_module(filepath: str, src_dir: str | None = None) -> str:
     return rel.replace(os.sep, ".").removesuffix(".py")
 
 
+def file_defines_function(filepath: str, name: str) -> bool:
+    """True if `filepath` has a top-level ``def <name>`` / ``async def <name>``.
+
+    Unlike :func:`find_plan_specs`/:func:`find_plan_functions_raw`, this
+    ignores the generator/``__all__`` plan-detection rule entirely -- for a
+    callable like ``abort_cleanup`` that is deliberately excluded from a
+    shortcuts module's ``__all__`` (so it never shows up as a `switch_to_*`
+    plan) but still needs to be located and imported by name.
+    """
+    try:
+        with open(filepath, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=filepath)
+    except (SyntaxError, OSError):
+        return False
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+        for node in tree.body
+    )
+
+
 def scan_user_dir(user_dir: str, _depth: int = 0) -> list[tuple]:
     """Recursive scan; returns (display_name, kind, abs_path, depth).
 

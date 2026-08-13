@@ -7,20 +7,49 @@ Maps the Bluesky RunEngine interrupt/recovery model onto buttons:
   delivered as SIGINT(s) to the kernel via :func:`kernel_session.interrupt`.
 * After a pause, the RunEngine's **four** recovery options appear as temporary
   buttons — ``RE.resume()`` / ``RE.stop()`` / ``RE.abort()`` / ``RE.halt()`` —
-  sent to the console.  They hide again once one is chosen.
+  sent to the console.  They hide again once one is chosen.  Stop/Abort/Halt
+  (never Resume) are always followed by the active profile's ``abort_cleanup()``
+  shortcut, if one is configured.
 * **Shut down kernel** — delegates to the caller's handler (which confirms and
   warns that a killed kernel cannot be resumed).
 """
 from __future__ import annotations
+
+import os
 
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
 from . import config
 from . import kernel_session as ks
+from . import paths as _paths
+from . import plan_parser as P
 from . import style as S
 
 _HOLD_MS = 1000  # press-and-hold threshold for a hard (immediate) halt
+
+# Recovery commands that end the run (Resume is excluded -- it isn't a
+# cleanup point) -- each is always followed by abort_cleanup(), if the
+# active profile defines one.
+_CLEANUP_COMMANDS = {"RE.stop()", "RE.abort()", "RE.halt()"}
+
+
+def _abort_cleanup_command() -> str | None:
+    """`from <module> import abort_cleanup` + a bare `abort_cleanup()` call,
+    resolved against the active profile's `switch_to_search_paths` (the same
+    per-beamline shortcuts file that already holds its `switch_to_*` plans).
+    `abort_cleanup` is deliberately excluded from that module's `__all__` (so
+    it never shows up as a switch-to shortcut), which is why this looks it up
+    with `plan_parser.file_defines_function` instead of `find_plan_specs`.
+    Returns None if no configured search path defines it.
+    """
+    import_root = config.get("import_root")
+    for rel_path in config.get("switch_to_search_paths") or []:
+        abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(_paths.PROJECT_ROOT, rel_path)
+        if P.file_defines_function(abs_path, "abort_cleanup"):
+            module = P.file_to_module(abs_path, import_root)
+            return f"from {module} import abort_cleanup\nabort_cleanup()"
+    return None
 
 
 def _stop_qss() -> str:
@@ -184,6 +213,10 @@ class RunControlBar(QtWidgets.QWidget):
     def _recover(self, command: str) -> None:
         # Send the RE.* command to the console (echoes + runs), then hide the bar.
         if self._console.is_running():
+            if command in _CLEANUP_COMMANDS:
+                cleanup = _abort_cleanup_command()
+                if cleanup:
+                    command = f"{command}\n{cleanup}"
             self._console.run_code(command)
         self._hide_recovery()
 
