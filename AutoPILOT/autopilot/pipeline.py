@@ -14,11 +14,17 @@ pick whichever fits, or make a lookup call first and decide afterward.
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import device_catalog, plan_catalog, plan_context, plan_renderer, plan_spec, tools
+from . import device_catalog, interaction_history, plan_catalog, plan_context, plan_renderer, plan_spec, tools
+from ._bpilot_path import ensure_bpilot_on_path
 from .llm_client import ArgoClient
+
+ensure_bpilot_on_path()
+
+from B_PILOT import config as bpilot_config  # noqa: E402
 
 GENERATED_DIR = Path(__file__).resolve().parent.parent / "generated_plans"
 
@@ -63,6 +69,10 @@ class PlanResult:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    # Set only when this result was persisted via `interaction_history.record_turn`
+    # (see `converse()`'s `record` param) -- lets a caller log a later human
+    # action (e.g. "opened in form") back against this exact turn.
+    turn_id: str | None = None
 
 
 def _build_system_prompt(catalog) -> str:
@@ -202,6 +212,9 @@ def converse(
     client: ArgoClient | None = None,
     temperature: float | None = None,
     max_turns: int = 6,
+    *,
+    record: bool = True,
+    conversation_id: str | None = None,
 ) -> tuple[PlanResult, list[dict]]:
     """Run one user turn through the multi-tool agent loop.
 
@@ -212,6 +225,15 @@ def converse(
     `profile=None` uses whatever profile is currently active (see
     `device_catalog.load`) -- the right default for a caller embedded in a
     live B-PILOT session, which should follow the GUI's own active profile.
+
+    `record=True` (the default -- real usage) persists this turn via
+    `interaction_history.record_turn`, keyed by the resolved profile's
+    beamline; pass `record=False` for synthetic/dev-harness calls (see
+    `generate_plan` and `scripts/eval_autopilot.py`) that shouldn't pollute
+    that beamline's real interaction history. `conversation_id` should be the
+    same id across every turn of one chat-dock session (see
+    `interaction_history.new_conversation_id`) so they can be grouped later;
+    a fresh one is generated per call when omitted (e.g. a one-off CLI call).
     """
     client = client or ArgoClient()
     catalog = device_catalog.load(profile)
@@ -455,6 +477,20 @@ def converse(
     result.input_tokens = usage["input"]
     result.output_tokens = usage["output"]
     result.cache_read_input_tokens = usage["cache_read"] or None
+
+    if record:
+        result.turn_id = uuid.uuid4().hex[:12]
+        profile_values = bpilot_config.profile_values(profile) if profile else bpilot_config.as_dict()
+        interaction_history.record_turn(
+            catalog.beamline,
+            conversation_id=conversation_id or interaction_history.new_conversation_id(),
+            turn_id=result.turn_id,
+            profile=profile or catalog.beamline,
+            experiment=profile_values.get("dm_experiment"),
+            request=request,
+            result=result,
+        )
+
     return result, messages
 
 
@@ -463,11 +499,20 @@ def generate_plan(
     profile: str | None = None,
     client: ArgoClient | None = None,
     temperature: float | None = None,
+    *,
+    record: bool = False,
 ) -> PlanResult:
     """Single-shot convenience wrapper over `converse()` with no memory -- used
     by the CLI harness (`scripts/try_plan_builder.py`), which has no concept of
-    a running conversation."""
-    result, _ = converse(request, history=None, profile=profile, client=client, temperature=temperature)
+    a running conversation.
+
+    `record` defaults to `False` here (unlike `converse()`'s own default) --
+    this wrapper is dev/CLI usage, not a real chat-dock interaction, so it
+    shouldn't pollute a beamline's real interaction history by default.
+    """
+    result, _ = converse(
+        request, history=None, profile=profile, client=client, temperature=temperature, record=record
+    )
     return result
 
 

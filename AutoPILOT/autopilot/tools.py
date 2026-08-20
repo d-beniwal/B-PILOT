@@ -494,7 +494,7 @@ _DENIED_NAME_PATTERNS = ("*.env", "*secret*", "*credential*", "*password*", "id_
 _CREDENTIAL_URL_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/:@]+:[^\s/:@]+@")
 
 
-def _redact(text: str) -> str:
+def redact(text: str) -> str:
     return _CREDENTIAL_URL_RE.sub(r"\1***:***@", text)
 
 
@@ -682,7 +682,7 @@ def search_codebase(query: str, path_prefix: str | None, limit: int | None) -> d
         rel_file = str(file_path.relative_to(root))
         for lineno, line in enumerate(lines, start=1):
             if query_lower in line.lower():
-                text = _redact(line.strip())
+                text = redact(line.strip())
                 if len(text) > _MAX_MATCH_LINE_CHARS:
                     text = text[:_MAX_MATCH_LINE_CHARS] + "…"
                 collected.append({"file": rel_file, "line": lineno, "text": text})
@@ -746,7 +746,7 @@ def read_source_file(path: str, start_line: int | None, end_line: int | None) ->
     if len(selected) > _MAX_READ_LINES:
         selected = selected[:_MAX_READ_LINES]
         truncated = True
-    text = _redact("\n".join(selected))
+    text = redact("\n".join(selected))
     if len(text) > _MAX_READ_CHARS:
         text = text[:_MAX_READ_CHARS]
         truncated = True

@@ -22,6 +22,7 @@ from html import escape
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+from .. import interaction_history
 from .. import pipeline
 from .. import plan_context
 from .. import settings
@@ -46,6 +47,11 @@ class _ChatWorker(QtCore.QObject):
         self.client: ArgoClient
         self.temperature: float | None
         self._history: list[dict] = []
+        # Groups every turn (and later "opened in form" outcome) of one
+        # chat-dock session for interaction logging -- regenerated in
+        # reset_conversation() alongside the dropped history, since "New
+        # Chat" starts a fresh conversation for logging purposes too.
+        self.conversation_id = interaction_history.new_conversation_id()
         self.reconfigure(
             model=initial_settings["model"],
             base_url=initial_settings["argo_base_url"],
@@ -72,13 +78,18 @@ class _ChatWorker(QtCore.QObject):
         call from the GUI thread even while `_run` is mid-request (that
         request just finishes under the old history)."""
         self._history = []
+        self.conversation_id = interaction_history.new_conversation_id()
 
     def _run(self) -> None:
         while True:
             request = self._queue.get()
             try:
                 result, self._history = pipeline.converse(
-                    request, history=self._history, client=self.client, temperature=self.temperature
+                    request,
+                    history=self._history,
+                    client=self.client,
+                    temperature=self.temperature,
+                    conversation_id=self.conversation_id,
                 )
             except Exception as exc:  # noqa: BLE001 -- never let the worker thread die silently
                 result = pipeline.PlanResult(
@@ -600,6 +611,12 @@ class ChatDockWidget(QtWidgets.QDockWidget):
             )
             return
         self._plan_runner.load_from_command(self._pending.gui_command)
+        interaction_history.record_outcome(
+            bpilot_config.as_dict().get("beamline") or "",
+            conversation_id=self._worker.conversation_id,
+            turn_id=self._pending.turn_id,
+            action="opened_in_form",
+        )
         self._append_note(
             f"Opened {template.gui_plan_name} in the form -- review the fields, "
             "then Run or Add to Queue."

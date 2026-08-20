@@ -55,7 +55,9 @@ def run_case(case: dict, profile: str | None, model: str, temperature: float) ->
 
     for turn_text in case["turns"]:
         client = ArgoClient(model=model)
-        result, history = converse(turn_text, history=history, profile=profile, client=client, temperature=temperature)
+        result, history = converse(
+            turn_text, history=history, profile=profile, client=client, temperature=temperature, record=False
+        )
         flagged = result.message is not None and any(marker in result.message for marker in _MECHANICAL_FAILURE_MARKERS)
         mechanical_failure = mechanical_failure or flagged
         turn_results.append(
