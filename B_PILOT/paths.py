@@ -50,7 +50,6 @@ CONFIG_PATH = _abs(BUNDLE_DIR, "gui_config.json")  # tiny pointer: {"active_prof
 PROFILES_DIR = _abs(BUNDLE_DIR, "profiles")         # one JSON file per beamline profile
 TEST_PLANS_DIR = _abs(BUNDLE_DIR, "test_plans")  # unused by default; kept for back-compat
 EMBEDDED_STARTER = _abs(BUNDLE_DIR, "embedded_kernel_starter.sh")
-SESSION_RECORDER = _abs(GUI_DIR, "session_recorder.py")
 
 # Directory to put on sys.path so ``import B_PILOT`` works when a module is run as
 # a plain script (``python B_PILOT/app.py``) rather than ``python -m B_PILOT``.

@@ -67,6 +67,18 @@ def _wait_reply(kc, msg_id: str, cf: str):
             return msg.get("content", {}).get("status") == "ok"
 
 
+def _run_cell(kc, code: str, cf: str):
+    """Execute one cell and block for its reply; True/False (ok), or None if
+    the kernel died. Split out so det_startup and the real plan run as two
+    separate cells -- each lands as its own history/plan-history entry
+    instead of collapsing into one under det_startup's name."""
+    try:
+        msg_id = kc.execute(code, silent=False, store_history=True)
+    except Exception:  # noqa: BLE001
+        return False
+    return _wait_reply(kc, msg_id, cf)
+
+
 def main(argv: list[str]) -> int:
     beamline = argv[1] if len(argv) > 1 else config.get("beamline")
     lock = _acquire_singleton(beamline)
@@ -119,18 +131,15 @@ def main(argv: list[str]) -> int:
                     startup = det_startup_state.build_startup_commands(
                         beamline, detectors
                     )
-                    command = (
-                        f"{startup}\n{nxt['command']}" if startup else nxt["command"]
-                    )
-                    try:
-                        msg_id = kc.execute(
-                            command, silent=False, store_history=True
-                        )
-                    except Exception:  # noqa: BLE001
-                        qs.set_item_status(beamline, nxt["id"], qs.ERROR)
-                        qs.set_state(beamline, qs.PAUSED)
-                        continue
-                    ok = _wait_reply(kc, msg_id, cf)
+                    if startup:
+                        ok = _run_cell(kc, startup, cf)
+                        if ok is None:
+                            break  # kernel died mid-plan; leave item as-is and exit
+                        if not ok:
+                            qs.set_item_status(beamline, nxt["id"], qs.ERROR)
+                            qs.set_state(beamline, qs.PAUSED)  # stop on error
+                            continue
+                    ok = _run_cell(kc, nxt["command"], cf)
                     if ok is None:
                         break  # kernel died mid-plan; leave item as-is and exit
                     qs.set_item_status(

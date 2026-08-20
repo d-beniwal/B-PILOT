@@ -216,8 +216,14 @@ class ContAcqPopup(QtWidgets.QFrame):
         startup = det_startup_state.build_startup_commands(
             config.get("beamline"), detectors
         )
-        lines = f"{startup}\n{import_line}\n{re_line}" if startup else f"{import_line}\n{re_line}"
-        self._console.run_code(lines)
+        # Sent as its own execute() call (not string-concatenated with the
+        # cont_acq lines) so it lands as its own history/plan-history entry --
+        # det_startup and cont_acq are separate plan invocations. Uses
+        # run_code_sequence (waits for det_startup's result) rather than two
+        # bare run_code() calls -- see its docstring for why firing both
+        # immediately can silently drop cont_acq if det_startup errors.
+        main_cmd = f"{import_line}\n{re_line}"
+        self._console.run_code_sequence([startup, main_cmd] if startup else [main_cmd])
         midas_bridge.notify_interactive(
             self._console, detectors, config.get("midas_bridge_enabled")
         )

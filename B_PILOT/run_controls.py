@@ -1,4 +1,4 @@
-"""Run controls shown below the console: Stop run, recovery actions, Shutdown.
+"""Run controls shown below the console: Stop run + recovery actions.
 
 Maps the Bluesky RunEngine interrupt/recovery model onto buttons:
 
@@ -10,8 +10,10 @@ Maps the Bluesky RunEngine interrupt/recovery model onto buttons:
   sent to the console.  They hide again once one is chosen.  Stop/Abort/Halt
   (never Resume) are always followed by the active profile's ``abort_cleanup()``
   shortcut, if one is configured.
-* **Shut down kernel** — delegates to the caller's handler (which confirms and
-  warns that a killed kernel cannot be resumed).
+
+Shut down kernel now lives in the top toolbar (``main_window.py``), set apart
+from the other controls there — :meth:`RunControlBar.hide_recovery` is called
+from that button's handler so an open recovery bar doesn't linger.
 """
 from __future__ import annotations
 
@@ -68,11 +70,10 @@ def _stop_qss() -> str:
 class RunControlBar(QtWidgets.QWidget):
     """Stop-run (soft/hard), RunEngine recovery actions, and Shutdown kernel."""
 
-    def __init__(self, console, on_shutdown, parent=None) -> None:
-        """`console` drives RE commands; `on_shutdown` is called for Shutdown."""
+    def __init__(self, console, parent=None) -> None:
+        """`console` drives the RE interrupt/recovery commands."""
         super().__init__(parent)
         self._console = console
-        self._on_shutdown = on_shutdown
         self._held = False
 
         self._hold_timer = QtCore.QTimer(self)
@@ -102,13 +103,6 @@ class RunControlBar(QtWidgets.QWidget):
         self._stop_btn.released.connect(self._on_released)
         row.addWidget(self._stop_btn)
         row.addStretch(1)
-
-        self._shutdown_btn = QtWidgets.QPushButton("Shut down kernel")
-        self._shutdown_btn.setToolTip(
-            "Terminate the kernel. A killed kernel cannot be resumed later."
-        )
-        self._shutdown_btn.clicked.connect(self._shutdown)
-        row.addWidget(self._shutdown_btn)
         outer.addLayout(row)
 
         # Own row below the buttons so a long status message never widens the
@@ -146,13 +140,12 @@ class RunControlBar(QtWidgets.QWidget):
         outer.addWidget(self._recovery)
 
     def add_trailing_widget(self, widget: QtWidgets.QWidget) -> None:
-        """Insert `widget` into the top button row, just before Shutdown.
+        """Append `widget` to the far end of the top button row.
 
         Used by the main window to place the BEAMMODE/TESTMODE toggle bar in
-        the same row as Stop run / Shut down kernel, rather than as its own
-        row underneath.
+        the same row as Stop run, rather than as its own row underneath.
         """
-        self._row.insertWidget(self._row.indexOf(self._shutdown_btn), widget)
+        self._row.addWidget(widget)
 
     def _recovery_btn(self, label: str, command: str, tip: str) -> QtWidgets.QPushButton:
         btn = QtWidgets.QPushButton(label)
@@ -165,7 +158,6 @@ class RunControlBar(QtWidgets.QWidget):
     def set_console_ready(self, ready: bool) -> None:
         """Enable the controls only when a kernel is connected."""
         self._stop_btn.setEnabled(ready)
-        self._shutdown_btn.setEnabled(ready)
         if not ready:
             self._hide_recovery()
 
@@ -210,6 +202,12 @@ class RunControlBar(QtWidgets.QWidget):
         self._recovery.setVisible(False)
         self._hint.setText("")
 
+    def hide_recovery(self) -> None:
+        """Hide the pause-recovery bar. Called by the main window's toolbar
+        Shutdown button before it tears down the kernel, so a lingering
+        Resume/Stop/Abort/Halt bar doesn't survive a shutdown."""
+        self._hide_recovery()
+
     def _recover(self, command: str) -> None:
         # Send the RE.* command to the console (echoes + runs), then hide the bar.
         if self._console.is_running():
@@ -219,10 +217,3 @@ class RunControlBar(QtWidgets.QWidget):
                     command = f"{command}\n{cleanup}"
             self._console.run_code(command)
         self._hide_recovery()
-
-    # ── Shutdown ────────────────────────────────────────────────────────────────
-
-    def _shutdown(self) -> None:
-        self._hide_recovery()
-        if callable(self._on_shutdown):
-            self._on_shutdown()

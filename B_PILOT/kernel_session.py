@@ -45,13 +45,17 @@ def session_name(beamline: str) -> str:
 
 
 def paths(beamline: str) -> dict:
-    """Fixed per-beamline file paths (connection file, sidecar, transcript)."""
+    """Fixed per-beamline file paths (connection file, sidecar).
+
+    Interactive history is no longer kept here -- it lives per-*experiment*
+    under ``experiments/`` (see :mod:`experiment_history`), since it must
+    outlive any one kernel process.
+    """
     base = os.path.join(os.path.expanduser(config.get("session_dir")), beamline)
     return {
         "dir": base,
         "connection_file": os.path.join(base, "kernel.json"),
         "sidecar": os.path.join(base, "session.json"),
-        "log": os.path.join(base, "kernel.log"),
     }
 
 
@@ -246,7 +250,7 @@ def launch(
     if is_alive(cf):
         info = read_info(beamline) or {}
         info.update({"beamline": beamline, "session_name": name,
-                     "connection_file": cf, "log": p["log"]})
+                     "connection_file": cf})
         return "already_running", info
 
     # 2) Not alive — clear any stale session/files so we start clean (and so the
@@ -298,7 +302,12 @@ def launch(
         "beamline": beamline,
         "session_name": name,
         "connection_file": cf,
-        "log": p["log"],
+        # Frozen at the moment this specific kernel was launched -- see
+        # console_panel.py's start()/attach(), which key the persistent
+        # per-experiment history record off this rather than the live
+        # (mutable) config value, which can go stale if a second, blocked
+        # launch attempt overwrites it afterward.
+        "experiment": config.get("dm_experiment") or "",
         "host": socket.gethostname(),
         "hosted_in": hosted_in,
         "cwd": cwd or os.getcwd(),
@@ -364,10 +373,10 @@ def stop(beamline: str) -> bool:
     Ordered so it works regardless of file-descriptor state or hosting mode:
     a socket-light shutdown request (no heartbeat thread), then ``screen -X
     quit`` (screen mode), then a PID kill fallback (no-screen mode / GUI
-    restart), then file cleanup — including the transcript log, so a fresh
-    kernel started later doesn't inherit this session's history (an attach
-    to a still-running kernel never reaches this function, so its log is
-    left untouched).
+    restart), then file cleanup. The per-experiment history record (see
+    :mod:`experiment_history`) is deliberately NOT touched here -- unlike the
+    old flat per-beamline transcript this replaced, it must survive a kernel
+    restart under the same experiment name.
     """
     p = paths(beamline)
     cf = p["connection_file"]
@@ -383,7 +392,7 @@ def stop(beamline: str) -> bool:
             ended = True
         except OSError:
             pass
-    for f in (cf, p["sidecar"], p["log"]):
+    for f in (cf, p["sidecar"]):
         try:
             os.remove(f)
         except OSError:
@@ -399,7 +408,6 @@ def status(beamline: str) -> dict:
         "beamline": beamline,
         "session_name": name,
         "connection_file": p["connection_file"],
-        "log": p["log"],
         "alive": is_alive(p["connection_file"]),
         "screen_present": _screen_running(name) if screen_available() else False,
         "info": read_info(beamline),

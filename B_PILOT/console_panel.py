@@ -27,21 +27,80 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import sys
 
 # qtconsole imports Qt through qtpy; pin the binding to PyQt5 before that happens.
 os.environ.setdefault("QT_API", "pyqt5")
 
 from PyQt5 import QtCore  # noqa: E402
+from PyQt5 import QtGui  # noqa: E402
 from PyQt5 import QtWidgets  # noqa: E402
 from qtconsole.manager import QtKernelManager  # noqa: E402
 from qtconsole.rich_jupyter_widget import RichJupyterWidget  # noqa: E402
 
 from . import config  # noqa: E402
 from . import det_startup_state  # noqa: E402
+from . import experiment_history  # noqa: E402
 from . import kernel_session as ks  # noqa: E402
 from . import paths  # noqa: E402
 from . import style as S  # noqa: E402
+
+# ── Output line-banding (separates a command's output from the command itself) ──
+# qtconsole's JupyterWidget has no public per-line-background hook (its
+# `style_sheet` trait only themes the In[]/Out[] prompt HTML spans and
+# pygments syntax colors -- the actual stdout/result/traceback text is
+# inserted as bare plain text). The only way to get a real full-width
+# highlighted band behind output lines is a QTextBlockFormat background on
+# the widget's own internal QTextEdit (`_control`) -- see
+# _rescan_output_bands below. Fixed (not theme-derived): the console is
+# hardcoded to qtconsole's "lightbg" style regardless of the app's
+# Light/Dark/Slate theme (see _wire_widget's set_default_style call).
+_OUTPUT_BAND_BG = QtGui.QColor("#eef2f8")
+_IN_PROMPT_RE = re.compile(r"^In \[\s*\d+\]:")
+_CONT_RE = re.compile(r"^\s*\.\.\.:")
+
+
+def _rescan_output_bands(control) -> None:
+    """Shade every "output" line of `control` (a qtconsole internal QTextEdit)
+    with :data:`_OUTPUT_BAND_BG`; leave "In [n]:"/continuation input lines and
+    the pre-first-input banner unstyled.
+
+    Reaches into qtconsole's private `_control`/document internals, so the
+    whole pass is guarded: a qtconsole version mismatch just silently
+    disables the highlighting rather than crashing the console.
+    """
+    try:
+        doc = control.document()
+        was_modified = doc.isModified()
+        undo_was_enabled = doc.isUndoRedoEnabled()
+        doc.blockSignals(True)          # formatting-only edits must not recurse
+        doc.setUndoRedoEnabled(False)   # ...and must not pollute the undo stack
+        try:
+            state = "banner"   # "banner" (unstyled) -> "input" -> "output"
+            block = doc.begin()
+            while block.isValid():
+                text = block.text()
+                if _IN_PROMPT_RE.match(text):
+                    state = "input"
+                elif state == "input" and _CONT_RE.match(text):
+                    pass   # continuation line of the same input cell
+                elif state != "banner":
+                    state = "output"
+                want_band = state == "output"
+                fmt = block.blockFormat()
+                has_band = fmt.background().style() != QtCore.Qt.NoBrush
+                if want_band != has_band:
+                    cursor = QtGui.QTextCursor(block)
+                    fmt.setBackground(QtGui.QBrush(_OUTPUT_BAND_BG) if want_band else QtGui.QBrush())
+                    cursor.setBlockFormat(fmt)
+                block = block.next()
+        finally:
+            doc.setUndoRedoEnabled(undo_was_enabled)
+            doc.blockSignals(False)
+            doc.setModified(was_modified)
+    except Exception:  # noqa: BLE001
+        pass
 
 # Fallback startup import if config is unavailable.  The real command is
 # user-configurable (Python → Configuration) — for MPE it defaults to
@@ -72,6 +131,11 @@ class ConsolePanel(QtWidgets.QWidget):
     # message (sent to every attached client) -- a command that raises never
     # fires this.
     code_executed = QtCore.pyqtSignal(str)
+    # Like `code_executed`, but fires for EVERY completed execution, success
+    # or error alike -- `(source, ok)`. Used by `run_code_sequence` to decide
+    # whether to send the next queued block (see its docstring for why this
+    # can't just be two back-to-back `run_code()` calls).
+    code_finished = QtCore.pyqtSignal(str, bool)
 
     def __init__(self, parent=None, font_size: int = 11) -> None:
         """Build the placeholder view; the kernel starts later via :meth:`start`."""
@@ -86,7 +150,7 @@ class ConsolePanel(QtWidgets.QWidget):
         self._attached = False               # True if reconnected to an existing kernel
         self._connection_file: str | None = None
         self._proc = None                    # Popen of a kernel we started (else None)
-        self._log_file: str | None = None    # transcript file the recorder appends to
+        self._experiment: str | None = None  # experiment this session's history is filed under
         # msg_id -> (exprs, callback) for in-flight silent status queries (see
         # query_values); dispatched from _on_shell_msg alongside the existing
         # kernel_info_reply handshake handling.
@@ -160,10 +224,16 @@ class ConsolePanel(QtWidgets.QWidget):
         self._attached = False
         # Fresh kernel: nothing has been through det_startup yet.
         det_startup_state.clear(beamline)
-        # Start the detached transcript recorder so the full session is captured
-        # from the first line (survives GUI restarts; readable while busy).
-        self._log_file = info.get("log") or self._log_path_for(cf)
-        self._start_recorder(cf, self._log_file)
+        # The experiment this launch was for -- frozen into the sidecar by
+        # kernel_session.launch() at the moment it actually started the
+        # kernel (see its docstring for why that's more reliable than a live
+        # config read here).
+        self._experiment = info.get("experiment") or ""
+        experiment_history.append_entry(beamline, self._experiment, "marker", "Kernel launched")
+        # Start the detached recorder so the full session is captured into
+        # this experiment's persistent history from the first line (survives
+        # GUI restarts; readable while busy).
+        self._start_recorder(cf, beamline, self._experiment)
         self._start_queue_runner()
         self._connect(cf)
 
@@ -198,18 +268,48 @@ class ConsolePanel(QtWidgets.QWidget):
 
         self._proc = None       # we did not spawn this one
         self._attached = True
+        beamline = config.get("beamline")
         # Reattaching to a kernel B-PILOT didn't just launch: we have no
         # reliable record of what's already been started up in it, so treat
         # every detector as unstarted (worst case: one harmless redundant
         # det_startup call, since it's idempotent).
-        det_startup_state.clear(config.get("beamline"))
-        # Reuse the transcript for this kernel; if there is none yet (e.g. a
-        # kernel not started by our GUI), begin recording from now on.
-        self._log_file = self._log_path_for(cf)
-        if not os.path.exists(self._log_file):
-            self._start_recorder(cf, self._log_file)
+        det_startup_state.clear(beamline)
+        self._experiment = self._resolve_attach_experiment(beamline, cf)
+        history_file = experiment_history.history_path(beamline, self._experiment)
+        # A recorder is still running for this kernel iff its history file
+        # already exists -- the kernel is a per-beamline singleton, so
+        # "recorder alive" and "kernel alive" coincide (the recorder only
+        # exits once the kernel's heartbeat dies). Only spawn a new one if
+        # there's no evidence one is already appending (e.g. a kernel not
+        # started by our GUI at all).
+        recorder_already_running = os.path.exists(history_file)
+        experiment_history.append_entry(beamline, self._experiment, "marker", "Kernel attached")
+        if not recorder_already_running:
+            self._start_recorder(cf, beamline, self._experiment)
         self._start_queue_runner()
         return self._connect(cf)
+
+    @staticmethod
+    def _resolve_attach_experiment(beamline: str, cf: str) -> str:
+        """Best-effort experiment name for an attach, resolved synchronously.
+
+        Trusts the beamline's kernel-launch sidecar (see kernel_session.launch)
+        only if it actually describes THIS connection file -- guarding against
+        a stale/foreign sidecar (e.g. a hand-picked connection file from
+        elsewhere). Falls back to :data:`experiment_history.UNKNOWN_EXPERIMENT`
+        rather than the slower async DM_EXP kernel-probe main_window.py uses
+        for the experiment *banner* -- that probe stays the authoritative
+        source for the banner, unchanged; this is only about picking which
+        history file to append into, and covers the common case (reattaching
+        to this beamline's own kernel after a GUI restart) synchronously and
+        correctly.
+        """
+        info = ks.read_info(beamline) or {}
+        if info.get("connection_file") == cf:
+            experiment = info.get("experiment")
+            if experiment:
+                return experiment
+        return experiment_history.UNKNOWN_EXPERIMENT
 
     # ── shared setup (start + attach) ────────────────────────────────────────────
 
@@ -278,27 +378,28 @@ class ConsolePanel(QtWidgets.QWidget):
         except Exception:  # noqa: BLE001
             return False
 
-    # ── Transcript recorder ──────────────────────────────────────────────────────
+    # ── Persistent per-experiment history recorder ───────────────────────────────
 
     @property
-    def log_file(self) -> str | None:
-        """Path to this session's transcript file (see :mod:`session_recorder`)."""
-        return self._log_file
+    def experiment(self) -> str | None:
+        """Experiment name this session's history is filed under (see
+        :mod:`experiment_history`), or ``None`` before a session starts."""
+        return self._experiment
 
     @staticmethod
-    def _log_path_for(cf: str) -> str:
-        """Transcript path for a connection file (kernel-*.json -> kernel-*.log)."""
-        return os.path.splitext(cf)[0] + ".log"
+    def _start_recorder(cf: str, beamline: str, experiment: str) -> None:
+        """Spawn the detached IOPub->history recorder for this kernel (best effort).
 
-    @staticmethod
-    def _start_recorder(cf: str, log_file: str) -> None:
-        """Spawn the detached IOPub->file recorder for this kernel (best effort)."""
+        Run as a module (not a bare script) since it needs its package for
+        ``from . import experiment_history`` -- same pattern as
+        :meth:`_start_queue_runner` below.
+        """
         import subprocess
 
-        script = paths.SESSION_RECORDER
         try:
             subprocess.Popen(
-                [sys.executable, script, cf, log_file],
+                [sys.executable, "-m", "B_PILOT.session_recorder", cf, beamline, experiment],
+                cwd=paths.PKG_PARENT,
                 start_new_session=True,   # independent of the GUI, like the kernel
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -343,6 +444,13 @@ class ConsolePanel(QtWidgets.QWidget):
 
     def _wire_widget(self, km, kc) -> None:
         """Build the RichJupyterWidget on (km, kc) and show it."""
+        # Drop any previous band-highlight timer first -- if left running it
+        # would eventually fire against this-about-to-be-replaced jw's
+        # (possibly already deleted) _control, a real crash risk, not just
+        # cleanup hygiene.
+        if getattr(self, "_band_timer", None) is not None:
+            self._band_timer.stop()
+
         jw = RichJupyterWidget()
         jw.kernel_manager = km
         jw.kernel_client = kc
@@ -370,6 +478,19 @@ class ConsolePanel(QtWidgets.QWidget):
         jw.font_size = self._font_size
         jw.reset_font()
 
+        # Shade output lines (see _rescan_output_bands) so they read as
+        # visually distinct from the commands that produced them. Debounced
+        # (0 ms single-shot) so the several `contentsChange` signals fired
+        # per message coalesce into one rescan per event-loop tick.
+        self._band_timer = QtCore.QTimer(self)
+        self._band_timer.setSingleShot(True)
+        self._band_timer.setInterval(0)
+        self._band_timer.timeout.connect(lambda: _rescan_output_bands(jw._control))
+        try:
+            jw._control.document().contentsChange.connect(lambda *a: self._band_timer.start())
+        except Exception:  # noqa: BLE001  (older/different qtconsole internals)
+            pass
+
         self.jupyter_widget = jw
         self._stack.addWidget(jw)
         self._stack.setCurrentWidget(jw)
@@ -391,6 +512,47 @@ class ConsolePanel(QtWidgets.QWidget):
         # RichJupyterWidget.execute() echoes the source AND sends it to the
         # kernel; kernel_client.execute() would not echo.
         self.jupyter_widget.execute(source=src, hidden=False)
+
+    def run_code_sequence(self, blocks: list[str]) -> None:
+        """Run `blocks` one at a time -- e.g. an auto-injected `det_startup`
+        ahead of the real plan -- each as its OWN kernel execution, only
+        sending the next block once the previous one finishes AND succeeded.
+
+        Two things this avoids:
+
+        * String-concatenating the blocks into one `run_code()` call would
+          run them as a single kernel cell, collapsing them into one history
+          entry (see `experiment_history.py`) even though they're separate
+          plan invocations.
+        * Firing them as separate `run_code()` calls back-to-back WITHOUT
+          waiting is also unsafe: if the first errors, ipykernel aborts any
+          execute_request already sitting in its queue within
+          `stop_on_error_timeout` of the error (default is effectively
+          immediate, but a second request sent with no round-trip in
+          between reliably lands inside that window) -- and an aborted
+          request never even publishes `execute_input`, so it silently
+          vanishes from the history record instead of erroring visibly.
+
+        Waiting for each reply also matches the original single-cell
+        behavior of never running the real plan if `det_startup` failed.
+        """
+        blocks = [b for b in (blocks or []) if b and b.strip()]
+        if not blocks:
+            return
+        head, tail = blocks[0], blocks[1:]
+        if not tail:
+            self.run_code(head)
+            return
+
+        def _on_finished(code: str, ok: bool) -> None:
+            if code != head:
+                return
+            self.code_finished.disconnect(_on_finished)
+            if ok:
+                self.run_code_sequence(tail)
+
+        self.code_finished.connect(_on_finished)
+        self.run_code(head)
 
     def query_values(self, exprs: dict[str, str], callback) -> None:
         """Silently evaluate `{label: python_expr}`; `callback(dict[label, bool|None])`.
@@ -463,6 +625,7 @@ class ConsolePanel(QtWidgets.QWidget):
             code = self._pending_execs.pop(parent_id)
             failed = parent_id in self._errored_execs
             self._errored_execs.discard(parent_id)
+            self.code_finished.emit(code, not failed)
             if not failed:
                 self.code_executed.emit(code)
 
@@ -532,6 +695,8 @@ class ConsolePanel(QtWidgets.QWidget):
         """
         cf = self._connection_file
         beamline = config.get("beamline")
+        if self._experiment is not None:
+            experiment_history.append_entry(beamline, self._experiment, "marker", "Kernel shut down")
         if self.kernel_client is not None:
             try:
                 self.kernel_client.stop_channels()
@@ -569,6 +734,8 @@ class ConsolePanel(QtWidgets.QWidget):
         Use after :meth:`shutdown` when the GUI stays open (e.g. the user chose
         *Shutdown kernel* and wants to launch a fresh one without restarting).
         """
+        if getattr(self, "_band_timer", None) is not None:
+            self._band_timer.stop()   # must not fire against jw's _control after deleteLater
         jw = self.jupyter_widget
         if jw is not None:
             self._stack.removeWidget(jw)
@@ -582,7 +749,7 @@ class ConsolePanel(QtWidgets.QWidget):
         self._busy = False
         self._down = False
         self._connection_file = None
-        self._log_file = None
+        self._experiment = None
         self._pending_queries.clear()
         self._stack.setCurrentWidget(self._placeholder)
 

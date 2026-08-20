@@ -148,6 +148,12 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         self._plan_cb.setMinimumWidth(S.px(220))
         self._plan_cb.currentIndexChanged.connect(self._on_plan_change)
         sel_row.addWidget(self._plan_cb)
+        history_btn = QtWidgets.QPushButton("🔍 History…")
+        history_btn.setToolTip(
+            "Browse past experiments and import a previously-run plan into this form."
+        )
+        history_btn.clicked.connect(self._open_history_search)
+        sel_row.addWidget(history_btn)
         sel_row.addStretch(1)
         if self._ribbon is not None:
             form_min_btn = QtWidgets.QToolButton()
@@ -360,6 +366,20 @@ class PlanRunnerPanel(QtWidgets.QWidget):
     def has_plan(self, name: str) -> bool:
         """Whether `name` is currently selectable (its source file is checked)."""
         return name in self._plan_list
+
+    # ── Import from persistent experiment history ────────────────────────────────
+
+    def _open_history_search(self) -> None:
+        """Browse every experiment's persistent history for this beamline and
+        import a previously-run plan straight into this form (see
+        :mod:`plan_history_dialog` / :mod:`experiment_history`)."""
+        from .plan_history_dialog import PlanHistoryDialog
+
+        dlg = PlanHistoryDialog(self)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            command = dlg.selected_command()
+            if command:
+                self.load_from_command(command)
 
     # ── Load from a queued command ("Copy to form") ─────────────────────────────
 

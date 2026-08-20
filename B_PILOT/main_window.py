@@ -32,6 +32,21 @@ from .switchto_popup import SwitchToButton
 _DEFAULT_LAUNCH_DIR = paths.BLUESKY_ROOT
 
 
+def _shutdown_btn_qss() -> str:
+    """QSS for the toolbar Shutdown-kernel button: the normal button fill,
+    but a bold red border marking it as a dangerous, hard-to-reverse action
+    -- set apart from the other borders in the same style as Stop run's
+    solid-red fill (run_controls.py's ``_stop_qss``), just less shouty since
+    this one sits right next to Profile/Launch controls, not below the
+    console where a run is actually in flight."""
+    border = S.darken(S.ERROR, 130)
+    return (
+        f"QPushButton{{border:{S.px(2)}px solid {S.ERROR};}}"
+        f"QPushButton:hover{{border-color:{border};}}"
+        f"QPushButton:disabled{{border-color:{S.BUTTON_DISABLED_BORDER};}}"
+    )
+
+
 class MainWindow(QtWidgets.QMainWindow):
     """QMainWindow hosting the plan runner, the embedded console, and run notes."""
 
@@ -63,7 +78,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.runner = PlanRunnerPanel(ribbon=self.ribbon)
         self.console = ConsolePanel()
         self.session_log = SessionLogView()
-        self.run_controls = RunControlBar(self.console, self._shutdown_kernel)
+        self.run_controls = RunControlBar(self.console)
         self.mode_buttons = ModeButtonBar(self.console)
         self.queue = QueuePanel(self.console)
         self._mode_btn = SwitchToButton(self.console)
@@ -228,6 +243,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._toolbar_status = QtWidgets.QLabel("")
         self._toolbar_status.setStyleSheet(f"color: {S.MUTED};")
         lay.addWidget(self._toolbar_status)
+
+        # A second stretch keeps Shutdown pinned to the far right edge, well
+        # clear of the status label and the Profile/Launch cluster -- a
+        # dangerous, irreversible action shouldn't sit shoulder-to-shoulder
+        # with everyday controls.
+        lay.addStretch(1)
+        self._shutdown_btn = QtWidgets.QPushButton("Shut down kernel")
+        self._shutdown_btn.setToolTip(
+            "Terminate the kernel. A killed kernel cannot be resumed later."
+        )
+        self._shutdown_btn.setStyleSheet(_shutdown_btn_qss())
+        self._shutdown_btn.setEnabled(False)
+        self._shutdown_btn.clicked.connect(self._shutdown_kernel)
+        lay.addWidget(self._shutdown_btn)
         return bar
 
     def _browse_dir(self) -> None:
@@ -368,7 +397,13 @@ class MainWindow(QtWidgets.QMainWindow):
         startup = det_startup_state.build_startup_commands(
             config.get("beamline"), detectors
         )
-        self.console.run_code(f"{startup}\n{command}" if startup else command)
+        # Sent as its own execute() call (not string-concatenated with
+        # `command`) so it lands as its own history/plan-history entry --
+        # det_startup and the real plan are separate plan invocations. Uses
+        # run_code_sequence (waits for det_startup's result) rather than two
+        # bare run_code() calls -- see its docstring for why firing both
+        # immediately can silently drop `command` if det_startup errors.
+        self.console.run_code_sequence([startup, command] if startup else [command])
         # Only trigger the MIDAS_GUI live-view bridge for dispatches that
         # came from the plan-form panel itself, not the SwitchTo popup
         # (out of scope for v1 — see B_PILOT/midas_bridge.py's plan notes).
@@ -523,7 +558,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console.shutdown()
         self.console.reset_view()
         self._reset_console_ui()
-        self.session_log.load(None)   # own kernel gone — drop the old transcript
+        self.session_log.load(None, None)   # own kernel gone — clear the view
         self._launch_console()
 
     # ── Console lifecycle ───────────────────────────────────────────────────────
@@ -611,10 +646,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_console_started(self) -> None:
         attached = self.console.is_attached()
-        # Show the full transcript (from disk) and tail it live — this is where
-        # you see everything, including history from before this GUI and live
-        # output while the kernel is busy.
-        self.session_log.load(self.console.log_file)
+        # Show the full persistent history for this experiment (from disk,
+        # newest first) and tail it live — this is where you see everything,
+        # including activity from before this GUI and live output while the
+        # kernel is busy.
+        self.session_log.load(config.get("beamline"), self.console.experiment)
         if attached:
             # Jump to the transcript so a reattached (possibly busy) kernel shows
             # activity immediately, instead of the blank interactive prompt.
@@ -626,6 +662,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Restarting only works for a kernel we started (not an attached one).
         self._act_restart.setEnabled(not attached)
         self._act_shutdown.setEnabled(True)
+        self._shutdown_btn.setEnabled(True)
         self.runner.set_console_ready(True)
         self._mode_btn.set_console_ready(True)
         self._contacq_btn.set_console_ready(True)
@@ -720,6 +757,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _shutdown_kernel(self) -> None:
         """Explicitly terminate the kernel and return to the idle state."""
+        self.run_controls.hide_recovery()
         ok = QtWidgets.QMessageBox.question(
             self,
             "Shut down kernel",
@@ -735,7 +773,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console.shutdown()
         self.console.reset_view()
         self._reset_console_ui()
-        self.session_log.load(None)   # own kernel gone — drop the old transcript
+        self.session_log.load(None, None)   # own kernel gone — clear the view
         self._set_toolbar_status("Kernel shut down.")
 
     def _reset_console_ui(self) -> None:
@@ -746,6 +784,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._attach_btn.setEnabled(True)
         self._act_restart.setEnabled(False)
         self._act_shutdown.setEnabled(False)
+        self._shutdown_btn.setEnabled(False)
         self.runner.set_console_ready(False)
         self._mode_btn.set_console_ready(False)
         self._contacq_btn.set_console_ready(False)
