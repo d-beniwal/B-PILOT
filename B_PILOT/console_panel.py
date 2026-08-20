@@ -16,13 +16,12 @@ GUI instance calls :meth:`attach` with that connection file to reconnect to the
 same running kernel — including one with a plan still running in it.
 
 The kernel is NOT started until :meth:`start` (or :meth:`attach`) is called.
-On a fresh :meth:`start`, the configured startup command(s) (see
-:meth:`run_startup_commands`) run automatically once the kernel connects —
-this DOES touch hardware/EPICS if configured to.  :meth:`attach` never runs
-them: a reattached kernel already went through this once, under its own
-original launch.  Autoreload setup (see :meth:`run_autoreload_setup`) is
-separate and runs on both a fresh start AND an attach, since it never
-touches hardware/EPICS.
+On a fresh :meth:`start`, autoreload setup (see :meth:`run_autoreload_setup`)
+and then the configured startup command(s) (see :meth:`run_startup_commands`)
+run automatically once the kernel connects — the latter DOES touch
+hardware/EPICS if configured to.  :meth:`attach` never runs either: a
+reattached kernel already went through both once, under its own original
+launch.
 """
 from __future__ import annotations
 
@@ -110,20 +109,12 @@ def _rescan_output_bands(control) -> None:
 # EPICS, so it is only ever triggered by an explicit user action.
 BLUESKY_STARTUP = "from instrument.collection import *"
 
-# Autoreload setup, run on EVERY start/attach (unlike BLUESKY_STARTUP above):
-# it's a harmless, idempotent IPython-session setting, not something that
-# touches hardware/EPICS, so there's no reason to skip it on a reattach.
-_AUTORELOAD_MESSAGE = (
-    "The %autoreload 2 mode reloads all modules (except those explicitly "
-    "excluded) every time before executing any code you type. So whenever "
-    "you edit a .py file that you've imported, the changes are picked up "
-    "automatically without needing to restart the kernel or manually call "
-    "importlib.reload()."
-)
+# Autoreload setup, run once on a fresh kernel start only (see
+# run_autoreload_setup) -- a reattached kernel already ran this under its own
+# original launch, same as BLUESKY_STARTUP above.
 AUTORELOAD_STARTUP_COMMANDS = [
     "%load_ext autoreload",
     "%autoreload 2",
-    f"print({_AUTORELOAD_MESSAGE!r})",
 ]
 
 _PLACEHOLDER = (
@@ -149,11 +140,6 @@ class ConsolePanel(QtWidgets.QWidget):
     # message (sent to every attached client) -- a command that raises never
     # fires this.
     code_executed = QtCore.pyqtSignal(str)
-    # Like `code_executed`, but fires for EVERY completed execution, success
-    # or error alike -- `(source, ok)`. Used by `run_code_sequence` to decide
-    # whether to send the next queued block (see its docstring for why this
-    # can't just be two back-to-back `run_code()` calls).
-    code_finished = QtCore.pyqtSignal(str, bool)
 
     def __init__(self, parent=None, font_size: int = 11) -> None:
         """Build the placeholder view; the kernel starts later via :meth:`start`."""
@@ -533,8 +519,10 @@ class ConsolePanel(QtWidgets.QWidget):
 
     def run_code_sequence(self, blocks: list[str]) -> None:
         """Run `blocks` one at a time -- e.g. an auto-injected `det_startup`
-        ahead of the real plan -- each as its OWN kernel execution, only
-        sending the next block once the previous one finishes AND succeeded.
+        ahead of the real plan, or the autoreload magics -- each as its OWN
+        kernel execution AND its own visible "In [n]:" prompt, only sending
+        the next block once the previous one's reply has been fully
+        processed by this widget.
 
         Two things this avoids:
 
@@ -543,16 +531,35 @@ class ConsolePanel(QtWidgets.QWidget):
           entry (see `experiment_history.py`) even though they're separate
           plan invocations.
         * Firing them as separate `run_code()` calls back-to-back WITHOUT
-          waiting is also unsafe: if the first errors, ipykernel aborts any
-          execute_request already sitting in its queue within
-          `stop_on_error_timeout` of the error (default is effectively
-          immediate, but a second request sent with no round-trip in
-          between reliably lands inside that window) -- and an aborted
-          request never even publishes `execute_input`, so it silently
-          vanishes from the history record instead of erroring visibly.
+          waiting is also unsafe -- for two independent reasons:
 
-        Waiting for each reply also matches the original single-cell
-        behavior of never running the real plan if `det_startup` failed.
+          1. If the first errors, ipykernel aborts any execute_request
+             already sitting in its queue within `stop_on_error_timeout` of
+             the error (default is effectively immediate, but a second
+             request sent with no round-trip in between reliably lands
+             inside that window) -- and an aborted request never even
+             publishes `execute_input`, so it silently vanishes from the
+             history record instead of erroring visibly.
+          2. Even when nothing errors, `self.jupyter_widget.execute()`
+             replaces the widget's *current input buffer* (the editable
+             region after its most-recently-shown prompt) with the next
+             block's source. If that call lands before the widget has
+             redrawn a fresh "In [n]:" prompt for the *previous* block's
+             reply, the new source gets stuffed into the stale prompt's
+             buffer instead of a new one -- visually merging the two
+             commands (or making the second look like the first's output).
+
+        We therefore wait on this widget's own `executed` signal (mirroring
+        qtconsole's `jw.executed`), not an IOPub-`status: idle`-derived signal
+        like `code_executed` (used elsewhere for cross-client dispatch, e.g.
+        the queue runner) -- IOPub and the shell-channel reply that redraws
+        the prompt arrive on separate sockets with no ordering guarantee
+        between them. qtconsole only emits `executed` AFTER it has called
+        `_show_interpreter_prompt_for_reply()` for that request, so by the
+        time we're notified, the next prompt is already on screen and safe
+        to fill -- fixing both hazards above and
+        restoring the original single-cell semantics (the real plan never
+        runs if `det_startup` failed).
         """
         blocks = [b for b in (blocks or []) if b and b.strip()]
         if not blocks:
@@ -562,14 +569,12 @@ class ConsolePanel(QtWidgets.QWidget):
             self.run_code(head)
             return
 
-        def _on_finished(code: str, ok: bool) -> None:
-            if code != head:
-                return
-            self.code_finished.disconnect(_on_finished)
-            if ok:
+        def _on_executed(msg) -> None:
+            self.executed.disconnect(_on_executed)
+            if msg.get("content", {}).get("status") == "ok":
                 self.run_code_sequence(tail)
 
-        self.code_finished.connect(_on_finished)
+        self.executed.connect(_on_executed)
         self.run_code(head)
 
     def query_values(self, exprs: dict[str, str], callback) -> None:
@@ -643,7 +648,6 @@ class ConsolePanel(QtWidgets.QWidget):
             code = self._pending_execs.pop(parent_id)
             failed = parent_id in self._errored_execs
             self._errored_execs.discard(parent_id)
-            self.code_finished.emit(code, not failed)
             if not failed:
                 self.code_executed.emit(code)
 
@@ -674,14 +678,13 @@ class ConsolePanel(QtWidgets.QWidget):
     def run_autoreload_setup(self) -> None:
         """Load IPython's autoreload extension and set it to mode 2.
 
-        Unlike :meth:`run_startup_commands`, this runs after BOTH a fresh
-        :meth:`start` and an :meth:`attach` — it never touches hardware/EPICS
-        and loading it twice is harmless (IPython just notes it's already
-        loaded), so there's no reason to skip it on a reattach the way the
-        real ``bluesky_startup`` command is skipped.  Uses
-        :meth:`run_code_sequence` (not a bare loop of :meth:`run_code`) so a
-        failure can't silently drop a later block via ipykernel's abort-queue
-        behavior (see that method's docstring).
+        Caller's responsibility to only call this on a fresh :meth:`start`,
+        same as :meth:`run_startup_commands` — a reattached kernel already
+        ran this once under its own original launch, so there's no need to
+        repeat it. Uses :meth:`run_code_sequence` (not a bare loop of
+        :meth:`run_code`) so each magic gets its own visible "In [n]:" cell
+        instead of one collapsing into the other (see that method's
+        docstring).
         """
         self.run_code_sequence(list(AUTORELOAD_STARTUP_COMMANDS))
 

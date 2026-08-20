@@ -668,10 +668,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._contacq_btn.set_console_ready(True)
         self.run_controls.set_console_ready(True)
         self.mode_buttons.set_console_ready(True)
-        # Autoreload is a harmless IPython-session setting (never touches
-        # hardware/EPICS), so — unlike the real bluesky_startup command below
-        # — it runs on every connection, fresh start or reattach alike.
-        self.console.run_autoreload_setup()
         where = self._workdir.text().strip()
         if attached:
             self._set_toolbar_status(
@@ -688,7 +684,9 @@ class MainWindow(QtWidgets.QMainWindow):
             # to dm_experiment.txt before this kernel started.
             self._set_experiment_banner(self._last_launch_experiment, confirmed=True)
             # Fresh kernel only -- an attached one already went through this
-            # under its own original launch.
+            # under its own original launch (autoreload state is part of
+            # that same already-established IPython session).
+            self.console.run_autoreload_setup()
             self.console.run_startup_commands()
 
     def _start_experiment_probe(self) -> None:
