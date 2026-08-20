@@ -20,7 +20,9 @@ On a fresh :meth:`start`, the configured startup command(s) (see
 :meth:`run_startup_commands`) run automatically once the kernel connects —
 this DOES touch hardware/EPICS if configured to.  :meth:`attach` never runs
 them: a reattached kernel already went through this once, under its own
-original launch.
+original launch.  Autoreload setup (see :meth:`run_autoreload_setup`) is
+separate and runs on both a fresh start AND an attach, since it never
+touches hardware/EPICS.
 """
 from __future__ import annotations
 
@@ -107,6 +109,22 @@ def _rescan_output_bands(control) -> None:
 # 'from instrument.collection import *'.  Running it CONNECTS TO HARDWARE /
 # EPICS, so it is only ever triggered by an explicit user action.
 BLUESKY_STARTUP = "from instrument.collection import *"
+
+# Autoreload setup, run on EVERY start/attach (unlike BLUESKY_STARTUP above):
+# it's a harmless, idempotent IPython-session setting, not something that
+# touches hardware/EPICS, so there's no reason to skip it on a reattach.
+_AUTORELOAD_MESSAGE = (
+    "The %autoreload 2 mode reloads all modules (except those explicitly "
+    "excluded) every time before executing any code you type. So whenever "
+    "you edit a .py file that you've imported, the changes are picked up "
+    "automatically without needing to restart the kernel or manually call "
+    "importlib.reload()."
+)
+AUTORELOAD_STARTUP_COMMANDS = [
+    "%load_ext autoreload",
+    "%autoreload 2",
+    f"print({_AUTORELOAD_MESSAGE!r})",
+]
 
 _PLACEHOLDER = (
     "IPython session not started.\n\n"
@@ -652,6 +670,20 @@ class ConsolePanel(QtWidgets.QWidget):
     def _on_jw_executed(self, msg) -> None:
         self._busy = False
         self.executed.emit(msg)
+
+    def run_autoreload_setup(self) -> None:
+        """Load IPython's autoreload extension and set it to mode 2.
+
+        Unlike :meth:`run_startup_commands`, this runs after BOTH a fresh
+        :meth:`start` and an :meth:`attach` — it never touches hardware/EPICS
+        and loading it twice is harmless (IPython just notes it's already
+        loaded), so there's no reason to skip it on a reattach the way the
+        real ``bluesky_startup`` command is skipped.  Uses
+        :meth:`run_code_sequence` (not a bare loop of :meth:`run_code`) so a
+        failure can't silently drop a later block via ipykernel's abort-queue
+        behavior (see that method's docstring).
+        """
+        self.run_code_sequence(list(AUTORELOAD_STARTUP_COMMANDS))
 
     def run_startup_commands(self) -> None:
         """Run the configured startup command(s), one console cell per line.

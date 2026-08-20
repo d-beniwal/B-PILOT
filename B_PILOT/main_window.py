@@ -668,6 +668,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._contacq_btn.set_console_ready(True)
         self.run_controls.set_console_ready(True)
         self.mode_buttons.set_console_ready(True)
+        # Autoreload is a harmless IPython-session setting (never touches
+        # hardware/EPICS), so — unlike the real bluesky_startup command below
+        # — it runs on every connection, fresh start or reattach alike.
+        self.console.run_autoreload_setup()
         where = self._workdir.text().strip()
         if attached:
             self._set_toolbar_status(
