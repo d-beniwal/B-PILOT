@@ -6,8 +6,15 @@ string queued/run by :class:`B_PILOT.plan_runner.PlanRunnerPanel`,
 Extracted out of `PlanRunnerPanel` so both panels build commands the same
 way; `plan_name`/`module`/`params` are passed explicitly instead of being
 read off `self`.
+
+Also builds the structured item dict the Bluesky queueserver (QS)'s
+``item_add`` expects (see :func:`make_queue_item`) -- kept dependency-free
+(no ``bluesky_queueserver_api`` import) since this module is used by the
+interactive-Run path too, which has nothing to do with QS.
 """
 from __future__ import annotations
+
+import ast
 
 from .plan_parser import ParamSpec
 from .plan_parser import RawCode
@@ -41,5 +48,114 @@ def make_re_line(
         inner = f"{plan_name}({', '.join(args)})"
     if notes:
         # Lands in the run's start document (cat[uid].metadata["start"]["notes"]).
+        return f"RE({inner}, md={{'notes': {notes!r}}})"
+    return f"RE({inner})"
+
+
+def _source_fragment_to_value(fragment: str):
+    """Best-effort native Python value for a source-text fragment (a
+    `MotorRowsWidget.tokens()` entry, or a raw `values["__args__"]` chunk):
+    a numeric/string/list literal round-trips via `ast.literal_eval`; a bare
+    device/motor name (or any other non-literal expression, e.g. `motor.axis`)
+    has no live-object equivalent over the QS wire, so it is passed through
+    as a plain string -- see `make_queue_item`'s docstring for why this is a
+    known, flagged limitation rather than an oversight.
+    """
+    try:
+        return ast.literal_eval(fragment)
+    except Exception:  # noqa: BLE001
+        return fragment
+
+
+def make_queue_item(
+    plan_name: str,
+    params: list[ParamSpec],
+    values: dict,
+) -> dict | None:
+    """Return a QS ``item_add``-shaped dict: ``{item_type, name, args, kwargs}``.
+
+    Mirrors `make_re_line`'s walk over `params`/`values`, but keeps native
+    Python values instead of `repr()`'d source text (QS's ZMQ transport
+    serializes the dict itself). Returns ``None`` for the generic
+    "arguments as Python" fallback shape (``values["__args__"]``, used for
+    undocumented plans with no parsed `ParamSpec`s) -- that free-text shape
+    has no reliable structured equivalent, same as a hand-edited command;
+    callers should treat a ``None`` result like the hand-edited-text case
+    (queueing via QS isn't available for it).
+
+    **Known limitation, not resolved here:** a `RawCode` value (a device/
+    motor reference, e.g. ``det1`` or ``motor.axis`` or a device_list's
+    ``[pg6, pg7]``) is a *live object reference* in the embedded-kernel
+    world this grammar was designed for -- there is no equivalent "the
+    running QS environment's object named X" wire value, so these become
+    plain strings (or a list of plain strings, for a device_list) in the
+    QS item's `kwargs`. Whether QS's own plan-argument binding resolves a
+    bare device-name string to the real object depends on how the target
+    plan itself is annotated in `instrument/plans/*.py`.
+
+    For `det`/`scalers`/other device-typed kwargs this was verified live
+    against redwood on 2026-08-25 (plain string device kwargs resolved
+    correctly -- see `mpe_bluesky/b-pilot/.context/DECISIONS.md`). For the
+    `plan_opener`/`per_step`/`plan_closer` (and `auxiliary_scan.py`'s
+    `take_reading`) `block{...}`-dtype kwargs specifically -- i.e. the six
+    `scan_skeletons.py` plans and `one_shot_no_checkpoint` -- this was a
+    real, confirmed gap as of 2026-08-25: those plans defaulted these
+    kwargs to live function objects, which QS's own registration can't
+    `ast.literal_eval`, so the plans never registered with QS at all (see
+    `mpe_bluesky/documents/qserver_plan_compatibility_deep_dive.md`). Fixed
+    on the `mpe_bluesky` side (branch `qserver_update`): those plans now
+    default these kwargs to plain string names and resolve the string back
+    to the real callable internally (`instrument/plans/plan_registry.py`),
+    which is exactly the string shape this function already sends -- no
+    change was needed here. Verified statically (the deep-dive's own AST
+    audit + an isolated `_process_plan` registration check against the real
+    `bluesky_queueserver` package) but **not yet exercised through a live
+    QS dispatch of one of these six plans** -- do that before considering
+    this fully closed.
+    """
+    if "__args__" in values:
+        return None
+
+    values = dict(values)
+    args = [
+        _source_fragment_to_value(tok) for tok in values.pop("__positional__", [])
+    ]
+    kwargs: dict = {}
+    for spec in params:
+        if spec.name not in values:
+            continue
+        val = values[spec.name]
+        if isinstance(val, RawCode):
+            text = str(val).strip()
+            if text.startswith("[") and text.endswith("]"):
+                kwargs[spec.name] = [
+                    n.strip() for n in text[1:-1].split(",") if n.strip()
+                ]
+            else:
+                kwargs[spec.name] = text
+        elif isinstance(val, list):
+            # `positions` dtype: a list of (x, y, z) tuples -- tuples aren't
+            # native to every wire encoding, so flatten to lists.
+            kwargs[spec.name] = [list(v) if isinstance(v, tuple) else v for v in val]
+        else:
+            kwargs[spec.name] = val
+    return {"item_type": "plan", "name": plan_name, "args": args, "kwargs": kwargs}
+
+
+def display_command_from_item(item: dict, notes: str = "") -> str:
+    """Reconstruct an ``RE(plan(...))``-shaped preview string from a QS item
+    dict -- used only for `queue_panel.py`'s Command-column preview and its
+    "Copy to form" round-trip (via `plan_runner.load_from_command`), never
+    sent anywhere. Not a faithful inverse of `make_queue_item` (device names
+    lost their `RawCode`-unquoted marking once round-tripped through QS's
+    JSON wire) -- good enough for a human-readable preview and for
+    `load_from_command`'s own `ast`-based re-parse, which only needs valid
+    Python source shaped like a real call.
+    """
+    name = item.get("name", "")
+    parts = [repr(a) for a in item.get("args", [])]
+    parts.extend(f"{k}={v!r}" for k, v in item.get("kwargs", {}).items())
+    inner = f"{name}({', '.join(parts)})"
+    if notes:
         return f"RE({inner}, md={{'notes': {notes!r}}})"
     return f"RE({inner})"

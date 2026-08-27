@@ -50,8 +50,13 @@ class PlanRunnerPanel(QtWidgets.QWidget):
 
     # emitted with (command_text, run_notes) when the user clicks Run
     runRequested = QtCore.pyqtSignal(str, str)
-    # emitted with (command_text, run_notes) when the user clicks Add to Queue
-    queueRequested = QtCore.pyqtSignal(str, str)
+    # emitted with (command_text, run_notes, qs_item) when the user clicks
+    # Add to Queue -- qs_item is the structured dict for the QS-backed queue
+    # (command_builder.make_queue_item()), or {} when none could be built
+    # (hand-edited text, or an unsupported plan shape). Always populated
+    # best-effort regardless of which backend is actually active, so
+    # main_window._on_queue has what it needs without a second round trip.
+    queueRequested = QtCore.pyqtSignal(str, str, dict)
     # emitted when Plans-list and Plan-form are both minimized, or when they
     # stop both being minimized -- lets the main window reclaim the freed
     # width for the console (see main_window._on_runner_both_minimized).
@@ -702,11 +707,24 @@ class PlanRunnerPanel(QtWidgets.QWidget):
             # and gate on non-blank text rather than per-field validity.
             has_text = bool(self._cmd_display.toPlainText().strip())
             self._run_btn.setEnabled(self._console_ready and has_text)
-            self._add_btn.setEnabled(has_text)
+            # No structured ParamSpec/value snapshot exists for hand-edited
+            # text, so no QS queue item can be built from it -- stays
+            # disabled while editing only for the QS backend (the native
+            # backend queues raw command text just fine, unchanged).
+            qs_backend = config.get("queue_backend") == "qs"
+            self._add_btn.setEnabled(has_text and not qs_backend)
+            self._add_btn.setToolTip(
+                "Not available while hand-editing the command — queuing via "
+                "the queue server needs the structured form values. Use Run "
+                "instead, or stop editing (✎) to queue the form as composed."
+                if qs_backend else
+                "Append this plan to the queue (bottom-right)."
+            )
             self._edit_btn.setEnabled(True)
             self._status_lbl.setText("" if has_text else "⚠ command is empty")
             self._status_lbl.setToolTip("")
             return
+        self._add_btn.setToolTip("Append this plan to the queue (bottom-right).")
 
         self._run_btn.setEnabled(self._console_ready and not errors)
         # Add-to-queue needs only a valid form (you can build the queue before
@@ -870,7 +888,27 @@ class PlanRunnerPanel(QtWidgets.QWidget):
         if not text:
             return
         notes = self._notes.toPlainText().strip()
-        self.queueRequested.emit(text, notes)
+        qs_item: dict = {}
+        # Only ever built for the QS backend -- make_queue_item() is QS-
+        # specific machinery the native backend has no use for, so it must
+        # never run (and never be able to fail) for a native-only session,
+        # regardless of what shape the target mpe_bluesky checkout's plans
+        # happen to be in.
+        if config.get("queue_backend") == "qs" and not self._editing:
+            plan_name = self._plan_cb.currentText()
+            values, errors = self._parse_params()
+            if not errors and values:
+                qs_item = command_builder.make_queue_item(
+                    plan_name, self._current_params, values
+                ) or {}
+        if config.get("queue_backend") == "qs" and not qs_item:
+            # Hand-edited text or an unsupported plan shape (the generic
+            # "__args__" fallback) has no structured QS item -- _live_validate
+            # already disables Add-to-Queue while editing for this backend,
+            # but an undocumented plan can still reach here while not editing.
+            self._flash_status("Can't queue this plan shape via the queue server.")
+            return
+        self.queueRequested.emit(text, notes, qs_item)
         self._notes.clear()
         if self._editing:
             self._flash_status(

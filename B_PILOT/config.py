@@ -159,6 +159,25 @@ DEFAULTS: dict = {
     # account via the pre-registered intake catalog files.
     "databroker_uri": "",
     "databroker_nexus_dir": "",  # optional folder holding raw NeXus files
+    # Which plan-queue backend "Add to Queue"/the queue panel use: "native"
+    # (default, B_PILOT.queue_store's own persistent per-beamline queue,
+    # driven by queue_runner.py) or "qs" (the Bluesky queueserver, see
+    # B_PILOT/qs_client.py). Restart required to take effect (same pattern
+    # as bluesky_root/ui_scale). Selecting "native" makes zero connection
+    # attempts toward a queue server -- qs_client's background thread is
+    # never even created.
+    "queue_backend": "native",
+    # Bluesky queueserver (QS) connection for the QS-backed plan queue (see
+    # B_PILOT/qs_client.py). Beamline facts, like databroker_catalog above --
+    # not a credentialed connection string, so safe to commit to a profile.
+    # QS's own start-re-manager (mpe_bluesky/qserver/qserver.sh) is set with
+    # no explicit --zmq-control-addr/--zmq-info-addr, so it binds the
+    # library defaults (ports 60615/60625) on whatever host it runs on --
+    # redwood today. Only used when queue_backend == "qs".
+    "qs_zmq_control_addr": "tcp://redwood.xray.aps.anl.gov:60615",
+    "qs_zmq_info_addr": "tcp://redwood.xray.aps.anl.gov:60625",
+    "qs_user": "",  # blank -> getpass.getuser() at connect time
+    "qs_user_group": "primary",  # matches user_group_permissions.yaml's "primary:" group
     # Which sections the viewer's "Export run…" writes out (Data Viewer's own
     # "Export settings…" dialog). data_preview defaults off — it can be large
     # and, unlike the others, isn't already on screen unless the user asked

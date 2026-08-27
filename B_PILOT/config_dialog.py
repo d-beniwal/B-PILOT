@@ -1,7 +1,7 @@
 """Configuration dialog: a profile bar on top, tabbed pages below.
 
-Tabs: Paths, Plans, Launch Session, Devices, Scan blocks, Data Viewer,
-Appearance — one page each,
+Tabs: Paths, Plans, Launch Session, Devices, Scan blocks, Queue Backend,
+Data Viewer, Appearance — one page each,
 selected via a left-hand list (`QListWidget` + `QStackedWidget`). A profile
 bar above the tabs lets you switch which on-disk profile
 (`B-PILOT/profiles/<name>/{default_config.json,active_config.json}`) you're
@@ -31,6 +31,7 @@ from . import device_discovery as ddisc
 from . import device_source
 from . import paths as _paths
 from . import plan_parser as P
+from . import qs_client
 from . import scan_building_discovery as sdisc
 from . import style as S
 
@@ -152,6 +153,7 @@ class ConfigDialog(QtWidgets.QDialog):
             ("Launch Session", self._page(self._build_launch_card(), self._build_session_card())),
             ("Devices", self._page(self._build_devices_card())),
             ("Scan blocks", self._page(self._build_scan_blocks_card())),
+            ("Queue Backend", self._page(self._build_queue_backend_card())),
             ("Data Viewer", self._page(self._build_data_viewer_card())),
             ("Appearance", self._page(
                 self._build_appearance_card(), self._build_autopilot_card()
@@ -963,6 +965,95 @@ class ConfigDialog(QtWidgets.QDialog):
         v.addLayout(grid)
         return frame
 
+    # ── Queue Backend (native persistent queue, or the bluesky queueserver) ──────
+
+    def _build_queue_backend_card(self) -> QtWidgets.QWidget:
+        card = S.make_card("Queue Backend")
+        v = QtWidgets.QVBoxLayout()
+        v.setSpacing(6)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(S.LabelRight("Backend:"))
+        self._queue_backend = QtWidgets.QComboBox()
+        self._queue_backend.addItem("Native (B-PILOT's own queue)", "native")
+        self._queue_backend.addItem("Queue Server (QS)", "qs")
+        self._queue_backend.setToolTip(
+            "Which plan-queue backend \"Add to Queue\"/the queue panel use.\n"
+            "Native (default): B-PILOT's own persistent per-beamline queue,\n"
+            "driven by queue_runner.py against the embedded console kernel.\n"
+            "Queue Server: dispatches through the Bluesky queueserver (QS)\n"
+            "instead, using the connection settings below. Takes effect on\n"
+            "the next launch, not live."
+        )
+        self._queue_backend.currentIndexChanged.connect(self._on_queue_backend_changed)
+        row.addWidget(self._queue_backend)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        note = QtWidgets.QLabel(
+            "Only the plan QUEUE (Add to Queue / the queue panel) is affected. "
+            "Run / interactive commands always go to the embedded console "
+            "kernel, regardless of this setting. Restart required to take effect."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {S.MUTED};")
+        v.addWidget(note)
+
+        grid = QtWidgets.QGridLayout()
+        grid.setColumnStretch(1, 1)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+
+        self._qs_control_addr = QtWidgets.QLineEdit()
+        self._qs_control_addr.setToolTip(
+            "ZMQ control address of the queueserver's start-re-manager "
+            "process (e.g. tcp://redwood.xray.aps.anl.gov:60615). Used for "
+            "adding/removing/starting queue items and RunEngine control."
+        )
+        grid.addWidget(S.LabelRight("Control address:"), 0, 0)
+        grid.addWidget(self._qs_control_addr, 0, 1)
+
+        self._qs_info_addr = QtWidgets.QLineEdit()
+        self._qs_info_addr.setToolTip(
+            "ZMQ info/console-publish address of the same queueserver "
+            "(e.g. tcp://redwood.xray.aps.anl.gov:60625)."
+        )
+        grid.addWidget(S.LabelRight("Info address:"), 1, 0)
+        grid.addWidget(self._qs_info_addr, 1, 1)
+
+        self._qs_user = QtWidgets.QLineEdit()
+        self._qs_user.setToolTip(
+            "User name attached to queue items this GUI adds. Leave blank "
+            "to use the logged-in account name."
+        )
+        grid.addWidget(S.LabelRight("User:"), 2, 0)
+        grid.addWidget(self._qs_user, 2, 1)
+
+        self._qs_user_group = QtWidgets.QLineEdit()
+        self._qs_user_group.setToolTip(
+            "User group for queueserver permission checks — must match a "
+            "group defined in mpe_bluesky/qserver/user_group_permissions.yaml "
+            "(default 'primary')."
+        )
+        grid.addWidget(S.LabelRight("User group:"), 3, 0)
+        grid.addWidget(self._qs_user_group, 3, 1)
+
+        v.addLayout(grid)
+        self._qs_fields = (
+            self._qs_control_addr, self._qs_info_addr, self._qs_user, self._qs_user_group,
+        )
+        card.body.addLayout(v)
+        return card
+
+    def _on_queue_backend_changed(self) -> None:
+        """Grey out the QS connection fields whenever Native is selected —
+        purely a visual hint that they're unused; they're still saved
+        unchanged either way, so switching back to "qs" later doesn't lose
+        them."""
+        is_qs = self._queue_backend.currentData() == "qs"
+        for w in self._qs_fields:
+            w.setEnabled(is_qs)
+
     # ── Data Viewer (databroker connection) ──────────────────────────────────────
 
     def _build_data_viewer_card(self) -> QtWidgets.QWidget:
@@ -1190,6 +1281,14 @@ class ConfigDialog(QtWidgets.QDialog):
         self._plan_building_blocks = dict(cfg.get("plan_building_blocks") or {})
         self._render_scan_blocks_display()
 
+        backend_idx = self._queue_backend.findData(cfg.get("queue_backend") or "native")
+        self._queue_backend.setCurrentIndex(backend_idx if backend_idx >= 0 else 0)
+        self._qs_control_addr.setText(cfg.get("qs_zmq_control_addr") or "")
+        self._qs_info_addr.setText(cfg.get("qs_zmq_info_addr") or "")
+        self._qs_user.setText(cfg.get("qs_user") or "")
+        self._qs_user_group.setText(cfg.get("qs_user_group") or "")
+        self._on_queue_backend_changed()
+
         self._databroker_catalog.setText(cfg.get("databroker_catalog") or "")
         self._databroker_uri.setText(cfg.get("databroker_uri") or "")
         self._databroker_nexus_dir.setText(cfg.get("databroker_nexus_dir") or "")
@@ -1234,6 +1333,11 @@ class ConfigDialog(QtWidgets.QDialog):
                 for i in range(self._suspender_paths_widget.count())
             ],
             "plan_building_blocks": dict(self._plan_building_blocks),
+            "queue_backend": self._queue_backend.currentData(),
+            "qs_zmq_control_addr": self._qs_control_addr.text().strip(),
+            "qs_zmq_info_addr": self._qs_info_addr.text().strip(),
+            "qs_user": self._qs_user.text().strip(),
+            "qs_user_group": self._qs_user_group.text().strip(),
             "databroker_catalog": self._databroker_catalog.text().strip(),
             "databroker_uri": self._databroker_uri.text().strip(),
             "databroker_nexus_dir": self._databroker_nexus_dir.text().strip(),
@@ -1241,6 +1345,13 @@ class ConfigDialog(QtWidgets.QDialog):
         }
 
     def accept(self) -> None:  # noqa: D102
+        values = self.values()
         config.set_active_profile(self._current_profile)
-        config.update(self.values())
+        config.update(values)
+        # Only touch qs_client when the QS backend is actually selected --
+        # calling it unconditionally would lazily create its background
+        # worker thread (and start attempting a connection) even for a
+        # Native-only user who just changed an unrelated setting.
+        if values.get("queue_backend") == "qs":
+            qs_client.reset()  # reconnect against any changed QS connection settings
         super().accept()

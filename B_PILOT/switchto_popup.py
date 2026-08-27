@@ -84,7 +84,7 @@ class SwitchToButton(QtWidgets.QPushButton):
     # bubbled up from the popup, same signature MainWindow already wires
     # PlanRunnerPanel/the old SwitchToPanel to.
     runRequested = QtCore.pyqtSignal(str, str)
-    queueRequested = QtCore.pyqtSignal(str, str)
+    queueRequested = QtCore.pyqtSignal(str, str, dict)
 
     def __init__(self, console, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -120,16 +120,26 @@ class SwitchToButton(QtWidgets.QPushButton):
 
     def _open_popup(self) -> None:
         popup = SwitchToPopup(self._console, parent=self)
-        popup.runRequested.connect(lambda cmd, notes, p=popup: self._forward(p, self.runRequested, cmd, notes))
-        popup.queueRequested.connect(lambda cmd, notes, p=popup: self._forward(p, self.queueRequested, cmd, notes))
+        popup.runRequested.connect(
+            lambda cmd, notes, p=popup: self._forward_run(p, cmd, notes)
+        )
+        popup.queueRequested.connect(
+            lambda cmd, notes, item, p=popup: self._forward_queue(p, cmd, notes, item)
+        )
         popup.move(S.clamp_popup_to_window(self, popup))
         popup.show()
 
-    def _forward(self, popup: "SwitchToPopup", signal, command: str, notes: str) -> None:
+    def _forward_run(self, popup: "SwitchToPopup", command: str, notes: str) -> None:
         # Stash the popup's detector list before it closes (and is destroyed)
         # so MainWindow can read it off `self` once this signal reaches it.
         self._last_area_detectors = popup.last_dispatch_area_detector_devices()
-        signal.emit(command, notes)
+        self.runRequested.emit(command, notes)
+
+    def _forward_queue(
+        self, popup: "SwitchToPopup", command: str, notes: str, qs_item: dict
+    ) -> None:
+        self._last_area_detectors = popup.last_dispatch_area_detector_devices()
+        self.queueRequested.emit(command, notes, qs_item)
 
 
 class SwitchToPopup(QtWidgets.QFrame):
@@ -140,7 +150,7 @@ class SwitchToPopup(QtWidgets.QFrame):
     """
 
     runRequested = QtCore.pyqtSignal(str, str)
-    queueRequested = QtCore.pyqtSignal(str, str)
+    queueRequested = QtCore.pyqtSignal(str, str, dict)
 
     def __init__(self, console, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent, QtCore.Qt.Popup)
@@ -283,6 +293,18 @@ class SwitchToPopup(QtWidgets.QFrame):
         text = self._command_text()
         if not text:
             return
+        name = self._shortcut_cb.currentText()
+        qs_item: dict = {}
+        # Only ever built for the QS backend -- see plan_runner._queue_command
+        # for why this must never run for a native-only session.
+        if config.get("queue_backend") == "qs":
+            values, errors = param_form.parse_values(self._current_params, self._param_widgets)
+            if not errors:
+                qs_item = command_builder.make_queue_item(name, self._current_params, values) or {}
+        if config.get("queue_backend") == "qs" and not qs_item:
+            # Keep the popup open so the warning is actually seen.
+            self._status_lbl.setText("Can't queue this shortcut via the queue server.")
+            return
         notes = self._notes.text().strip()
-        self.queueRequested.emit(text, notes)
+        self.queueRequested.emit(text, notes, qs_item)
         self.close()

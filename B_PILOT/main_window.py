@@ -14,6 +14,7 @@ from . import device_source
 from . import kernel_session as ks
 from . import midas_bridge
 from . import paths
+from . import queue_panel
 from . import style as S
 from .console_panel import ConsolePanel
 from .contacq_popup import ContAcqButton
@@ -21,7 +22,6 @@ from .mode_buttons import ModeButtonBar
 from .panel_ribbon import CollapsibleDockPanel
 from .panel_ribbon import PanelRibbon
 from .plan_runner import PlanRunnerPanel
-from .queue_panel import QueuePanel
 from .run_controls import RunControlBar
 from .session_log import SessionLogView
 from .switchto_popup import SwitchToButton
@@ -73,6 +73,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._viewer_pid: int | None = None
         self._viewer_poll_timer: QtCore.QTimer | None = None
         self._main_split_saved_sizes: list[int] | None = None
+        # Read once at startup (restart required to change, same pattern as
+        # bluesky_root/ui_scale) -- "native" makes zero connection attempts
+        # toward a queue server; only "qs" ever touches qs_client.
+        self._queue_backend = config.get("queue_backend")
 
         self.ribbon = PanelRibbon()
         self.runner = PlanRunnerPanel(ribbon=self.ribbon)
@@ -80,7 +84,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session_log = SessionLogView()
         self.run_controls = RunControlBar(self.console)
         self.mode_buttons = ModeButtonBar(self.console)
-        self.queue = QueuePanel(self.console)
+        self.queue = queue_panel.create_queue_panel(self.console)
         self._mode_btn = SwitchToButton(self.console)
         self._contacq_btn = ContAcqButton(self.console)
         self.runner.runRequested.connect(self._on_run)
@@ -339,6 +343,20 @@ class MainWindow(QtWidgets.QMainWindow):
             "the GUI is closed or the kernel is busy — so nothing is lost and you "
             "can watch a running plan live without waiting for the prompt.",
         )
+        if self._queue_backend == "qs":
+            # Only built/added for the QS backend -- its own poll timer is
+            # what actually triggers qs_client's first connection attempt,
+            # so a Native-only user never gets one.
+            from .qs_console_panel import QSConsolePanel
+
+            self.qs_console = QSConsolePanel()
+            self._console_tabs.addTab(self.qs_console, "QS Console")
+            self._console_tabs.setTabToolTip(
+                2,
+                "RunEngine console output for plans dispatched through the queue "
+                "server (print statements, scan progress, errors) — a separate "
+                "RunEngine process from the embedded-kernel Console/Session log tabs.",
+            )
         console_card.body.addWidget(self._console_tabs)
         # BEAMMODE/TESTMODE toggles share run_controls' top row with Stop run
         # / Shut down kernel, rather than sitting in a row of their own.
@@ -414,22 +432,47 @@ class MainWindow(QtWidgets.QMainWindow):
                 config.get("midas_bridge_enabled"),
             )
 
-    def _on_queue(self, command: str, notes: str) -> None:
-        """Append a plan to the queue (the scheduler dispatches it in turn).
+    def _on_queue(self, command: str, notes: str, qs_item: dict) -> None:
+        """Append a plan to the active queue backend (see
+        ``config.get("queue_backend")`` / :func:`queue_panel.create_queue_panel`).
 
-        `notes` is stored separately by `queue_store` for the queue panel's
-        tooltip display only — the actual attachment to the run's start
-        document happens via the ``md={'notes': ...}`` already embedded in
-        `command` (see `plan_runner._make_re_line`).
+        **Native** (default): `notes` is stored separately by `queue_store`
+        for the queue panel's tooltip display only — the actual attachment
+        to the run's start document happens via the ``md={'notes': ...}``
+        already embedded in `command` (see `plan_runner._make_re_line`). Any
+        needed `det_startup` is injected later, by `queue_runner.py` right
+        before it actually dispatches this item — not here, since the item
+        may sit queued for a while and the kernel's real state (or what's
+        already been started by something else) could change before it runs.
 
-        Any needed `det_startup` is injected later, by `queue_runner.py`
-        right before it actually dispatches this item — not here, since the
-        item may sit queued for a while and the kernel's real state (or
-        what's already been started by something else) could change before
-        it runs.
+        **QS**: `qs_item` (built by `plan_runner`/`switchto_popup` via
+        `command_builder.make_queue_item`) is the structured dict actually
+        sent to the queue server; `command` is used only as a fallback for
+        logging. `notes` land on the item's ``meta`` (spread as the run's
+        own ``RE(plan(...), **meta)`` metadata kwargs), not a separate
+        store, since QS reliably preserves ``meta`` but drops any other
+        unrecognized top-level key. Any needed `det_startup` is enqueued
+        now, as its own separate queue item immediately ahead of this one
+        (see `det_startup_state.build_startup_items`) — QS dispatches items
+        itself, so B-PILOT has no hook to inject text right before actual
+        execution the way the native queue runner does; this checks
+        staleness at enqueue time instead of dispatch time, an accepted,
+        documented behavior change.
         """
         area_detectors = self._sender_area_detectors()
-        self.queue.add(command, notes, area_detectors=area_detectors)
+        if self._queue_backend == "qs":
+            if not qs_item:
+                return  # hand-edited text / unsupported shape -- see plan_runner
+            for startup_item in det_startup_state.build_startup_items(
+                config.get("beamline"), area_detectors
+            ):
+                self.queue.add(startup_item)
+            item = dict(qs_item)
+            if notes:
+                item["meta"] = {**item.get("meta", {}), "notes": notes}
+            self.queue.add(item)
+        else:
+            self.queue.add(command, notes, area_detectors=area_detectors)
 
     # ── Menu ──────────────────────────────────────────────────────────────────
 

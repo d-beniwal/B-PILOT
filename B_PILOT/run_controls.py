@@ -3,13 +3,25 @@
 Maps the Bluesky RunEngine interrupt/recovery model onto buttons:
 
 * **Stop run** — *click* = deferred pause (one Ctrl+C, stops at the next
-  checkpoint); *press-and-hold >1 s* = immediate pause (double Ctrl+C).  Both are
-  delivered as SIGINT(s) to the kernel via :func:`kernel_session.interrupt`.
+  checkpoint); *press-and-hold >1 s* = immediate pause (double Ctrl+C).
+  Console-kernel target: delivered as SIGINT(s) via
+  :func:`kernel_session.interrupt`.
 * After a pause, the RunEngine's **four** recovery options appear as temporary
   buttons — ``RE.resume()`` / ``RE.stop()`` / ``RE.abort()`` / ``RE.halt()`` —
   sent to the console.  They hide again once one is chosen.  Stop/Abort/Halt
   (never Resume) are always followed by the active profile's ``abort_cleanup()``
   shortcut, if one is configured.
+
+When ``config.get("queue_backend") == "qs"``, a plan dispatched through the
+queue server (:mod:`qs_client`) is a second, independent RunEngine that can
+be "the thing currently running" — every action above then picks its
+**target** per click (:meth:`RunControlBar._active_target`) instead of
+assuming the console kernel: Stop maps to :func:`qs_client.re_pause`, the
+four recovery buttons to :func:`qs_client.re_resume`/`re_stop`/`re_abort`/
+`re_halt`. ``abort_cleanup()`` (Python source sent to the kernel) has no QS
+equivalent — a documented, deliberate gap for QS-dispatched plans; console-
+dispatched (interactive Run) plans are unaffected. For the native backend
+(the default), none of this QS polling ever runs — see :meth:`__init__`.
 
 Shut down kernel now lives in the top toolbar (``main_window.py``), set apart
 from the other controls there — :meth:`RunControlBar.hide_recovery` is called
@@ -26,14 +38,30 @@ from . import config
 from . import kernel_session as ks
 from . import paths as _paths
 from . import plan_parser as P
+from . import qs_client
 from . import style as S
 
 _HOLD_MS = 1000  # press-and-hold threshold for a hard (immediate) halt
 
 # Recovery commands that end the run (Resume is excluded -- it isn't a
 # cleanup point) -- each is always followed by abort_cleanup(), if the
-# active profile defines one.
+# active profile defines one. Console-kernel target only (see _recover).
 _CLEANUP_COMMANDS = {"RE.stop()", "RE.abort()", "RE.halt()"}
+
+# QS manager_state values (bluesky_queueserver.manager.manager.MState) that
+# mean a queued plan is actively running or paused mid-plan. Only consulted
+# when the QS backend is active (see __init__).
+_QS_ACTIVE_STATES = {"executing_queue", "executing_task", "starting_queue", "paused"}
+
+# Same four recovery actions, QS-API target -- keyed by the same command
+# strings the recovery buttons were built with (see _build_ui). Only ever
+# invoked when the QS backend is active (see _recover).
+_QS_RECOVERY = {
+    "RE.resume()": qs_client.re_resume,
+    "RE.stop()": qs_client.re_stop,
+    "RE.abort()": qs_client.re_abort,
+    "RE.halt()": qs_client.re_halt,
+}
 
 
 def _abort_cleanup_command() -> str | None:
@@ -75,6 +103,14 @@ class RunControlBar(QtWidgets.QWidget):
         super().__init__(parent)
         self._console = console
         self._held = False
+        self._target: str | None = None  # "kernel" or "qs", set when a pause starts
+        # Only ever True for the QS backend (config.get("queue_backend") ==
+        # "qs") -- gates every qs_client call and the QS poll timer below,
+        # so the native backend (the default) never creates qs_client's
+        # background worker thread or makes a single connection attempt.
+        self._qs_enabled = config.get("queue_backend") == "qs"
+        self._qs_active = False
+        self._seen_qs_error_seq = 0
 
         self._hold_timer = QtCore.QTimer(self)
         self._hold_timer.setSingleShot(True)
@@ -83,6 +119,15 @@ class RunControlBar(QtWidgets.QWidget):
 
         self._build_ui()
         self.set_console_ready(False)
+
+        if self._qs_enabled:
+            # Independent light poll of the QS queue's RE state, so Stop/
+            # recovery work for a queued plan even though it runs in QS's
+            # own environment, not this console's kernel.
+            self._qs_timer = QtCore.QTimer(self)
+            self._qs_timer.setInterval(750)
+            self._qs_timer.timeout.connect(self._poll_qs)
+            self._qs_timer.start()
 
     # ── UI ──────────────────────────────────────────────────────────────────────
 
@@ -153,18 +198,52 @@ class RunControlBar(QtWidgets.QWidget):
         btn.clicked.connect(lambda: self._recover(command))
         return btn
 
-    # ── Enable/disable with the console ─────────────────────────────────────────
+    # ── Enable/disable with the console / QS ─────────────────────────────────────
 
     def set_console_ready(self, ready: bool) -> None:
-        """Enable the controls only when a kernel is connected."""
-        self._stop_btn.setEnabled(ready)
-        if not ready:
+        """Enable Stop when a kernel is connected (or, for the QS backend,
+        when a queued plan is actively running -- see :meth:`_active_target`)."""
+        self._console_ready = ready
+        self._update_stop_enabled()
+        if not ready and self._target != "qs":
             self._hide_recovery()
+
+    def _poll_qs(self) -> None:
+        status = qs_client.status() or {}
+        active = status.get("manager_state") in _QS_ACTIVE_STATES
+        if active != self._qs_active:
+            self._qs_active = active
+            self._update_stop_enabled()
+        # Surface a failed QS action (re_pause/re_resume/re_stop/re_abort/
+        # re_halt) -- these are fire-and-forget over the network same as
+        # queue_panel's item_add, so a rejected/undeliverable call used to
+        # look identical to one that actually reached the RE Manager.
+        err = qs_client.last_action_error()
+        if err is not None and err[0] != self._seen_qs_error_seq:
+            self._seen_qs_error_seq = err[0]
+            self._hint.setText(f"Queue server error: {err[2]}")
+
+    def _update_stop_enabled(self) -> None:
+        self._stop_btn.setEnabled(self._console_ready or self._qs_active)
+
+    # ── Target selection (QS backend only; console-only otherwise) ──────────────
+
+    def _active_target(self) -> str | None:
+        """Which backend a Stop/recovery click should act on right now: the
+        console kernel (if it's running something) takes priority since it
+        reflects an action this GUI itself just dispatched interactively;
+        otherwise QS, if the QS backend is active and it's actively
+        executing/paused a queued plan; else `None` (nothing to stop)."""
+        if self._console.is_running():
+            return "kernel"
+        if self._qs_enabled and self._qs_active:
+            return "qs"
+        return None
 
     # ── Stop run: click = soft, hold = hard ─────────────────────────────────────
 
     def _on_pressed(self) -> None:
-        if not self._console.is_running():
+        if self._active_target() is None:
             return
         self._held = False
         self._hold_timer.start()
@@ -178,14 +257,27 @@ class RunControlBar(QtWidgets.QWidget):
         self._hold_timer.stop()
         if self._held:
             return  # hard halt already fired on hold
-        if self._console.is_running():
+        if self._active_target() is not None:
             self._interrupt(hard=False)
 
     def _interrupt(self, hard: bool) -> None:
-        ok = ks.interrupt(config.get("beamline"), hard=hard)
-        if not ok:
-            self._hint.setText("Could not signal the kernel.")
+        target = self._active_target()
+        if target == "kernel":
+            # ks.interrupt() is a local signal, not a network round trip --
+            # still synchronous/instant, so its success/failure is checked
+            # directly (unchanged from before the QS target existed).
+            if not ks.interrupt(config.get("beamline"), hard=hard):
+                self._hint.setText("Could not signal the kernel.")
+                return
+        elif target == "qs":
+            # qs_client's action calls are fire-and-forget (see its module
+            # docstring -- they run on a background thread so a slow/
+            # unreachable queue server never blocks the GUI); there is no
+            # synchronous success/failure to check here.
+            qs_client.re_pause(option="immediate" if hard else "deferred")
+        else:
             return
+        self._target = target
         self._show_recovery(immediate=hard)
 
     # ── Recovery ────────────────────────────────────────────────────────────────
@@ -201,6 +293,7 @@ class RunControlBar(QtWidgets.QWidget):
     def _hide_recovery(self) -> None:
         self._recovery.setVisible(False)
         self._hint.setText("")
+        self._target = None
 
     def hide_recovery(self) -> None:
         """Hide the pause-recovery bar. Called by the main window's toolbar
@@ -209,8 +302,14 @@ class RunControlBar(QtWidgets.QWidget):
         self._hide_recovery()
 
     def _recover(self, command: str) -> None:
-        # Send the RE.* command to the console (echoes + runs), then hide the bar.
-        if self._console.is_running():
+        # `command` is the console-kernel form ("RE.resume()" etc.) chosen at
+        # button-build time -- translated to the QS API call when that's the
+        # active target (QS has no abort_cleanup() equivalent, so that step
+        # is skipped for the QS target -- see module docstring).
+        target = self._target
+        if target == "qs" and self._qs_enabled:
+            _QS_RECOVERY.get(command, lambda: None)()
+        elif self._console.is_running():
             if command in _CLEANUP_COMMANDS:
                 cleanup = _abort_cleanup_command()
                 if cleanup:
