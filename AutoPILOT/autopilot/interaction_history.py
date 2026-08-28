@@ -131,6 +131,8 @@ def record_turn(
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
         "cache_read_input_tokens": result.cache_read_input_tokens,
+        "critic_flagged": result.critic_flagged,
+        "critic_concerns": [tools.redact(c) for c in result.critic_concerns] if result.critic_concerns else None,
     }
     _append(beamline, entry)
 

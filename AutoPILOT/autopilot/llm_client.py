@@ -48,17 +48,28 @@ class ArgoClient:
         )
         return "".join(block.text for block in resp.content if block.type == "text")
 
-    def call(self, system: str, messages: list[dict], tools: list[dict], temperature: float | None = None):
+    def call(
+        self,
+        system: str,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float | None = None,
+        tool_choice: dict | None = None,
+    ):
         """One turn of a (possibly multi-turn) conversation. Returns the raw
         Anthropic ``Message`` response (``.content`` blocks, ``.stop_reason``) --
         the caller (see `pipeline.converse`) decides what to do with whichever
         single tool, if any, the model chooses to call.
 
-        `tool_choice` is always ``{"type": "auto", "disable_parallel_tool_use":
+        `tool_choice` defaults to ``{"type": "auto", "disable_parallel_tool_use":
         True}`` -- the model may reply with plain text, or call exactly one of
         `tools` (never more than one at a time, which keeps a multi-turn loop
         simple: a turn either ends the conversation, asks a lookup question, or
-        resolves to a final decision -- never several things at once).
+        resolves to a final decision -- never several things at once). Pass an
+        explicit `tool_choice` (e.g. ``{"type": "tool", "name": "..."}``) to
+        force a single specific tool call instead -- used by `critic.py` for a
+        structured review verdict, where "the model might just reply with text
+        instead" would defeat the point of asking for a verdict at all.
 
         `system` is passed with a prompt-caching breakpoint since it carries the
         (large, static-per-session) grammar + template + device-catalog context --
@@ -79,7 +90,7 @@ class ArgoClient:
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=messages,
             tools=tools,
-            tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+            tool_choice=tool_choice or {"type": "auto", "disable_parallel_tool_use": True},
         )
         if temperature is not None:
             kwargs["temperature"] = temperature

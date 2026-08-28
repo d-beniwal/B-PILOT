@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import device_catalog, interaction_history, plan_catalog, plan_context, plan_renderer, plan_spec, tools
+from . import critic, device_catalog, interaction_history, plan_catalog, plan_context, plan_renderer, plan_spec, tools
 from ._bpilot_path import ensure_bpilot_on_path
 from .llm_client import ArgoClient
 
@@ -73,6 +73,12 @@ class PlanResult:
     # (see `converse()`'s `record` param) -- lets a caller log a later human
     # action (e.g. "opened in form") back against this exact turn.
     turn_id: str | None = None
+    # Set only for a terminal proposal when `use_critic=True` (the default) --
+    # see `critic.py`. `critic_flagged` is None when the critic pass did not
+    # run at all (a lookup/decline/ask_user turn, or use_critic=False), False
+    # when it ran and found no concern, True when it ran and flagged one.
+    critic_flagged: bool | None = None
+    critic_concerns: list[str] | None = None
 
 
 def _build_system_prompt(catalog) -> str:
@@ -215,6 +221,7 @@ def converse(
     *,
     record: bool = True,
     conversation_id: str | None = None,
+    use_critic: bool = True,
 ) -> tuple[PlanResult, list[dict]]:
     """Run one user turn through the multi-tool agent loop.
 
@@ -225,6 +232,14 @@ def converse(
     `profile=None` uses whatever profile is currently active (see
     `device_catalog.load`) -- the right default for a caller embedded in a
     live B-PILOT session, which should follow the GUI's own active profile.
+
+    `use_critic=True` (the default) runs a second, independent LLM turn
+    (`critic.py`) over any terminal proposal before it is returned, adding a
+    disclosed caveat (never a block) when it finds a real mismatch between
+    the request and the drafted command -- see `critic.py`'s module
+    docstring. Pass `use_critic=False` to skip it (e.g. an A/B evaluation
+    comparing catch rate and cost with and without it, or a caller that
+    wants the lowest possible latency).
 
     `record=True` (the default -- real usage) persists this turn via
     `interaction_history.record_turn`, keyed by the resolved profile's
@@ -427,10 +442,18 @@ def converse(
 
         notes = _flag_device_substitutions(template, clean, request)
 
+        command_for_review = plan_renderer.render_command(template, clean)
+        critic_verdict = (
+            critic.review_proposal(request, command_for_review, notes, client=client, temperature=temperature)
+            if use_critic
+            else None
+        )
+        if critic_verdict is not None and critic_verdict.flagged:
+            notes = notes + [f"Second-pass review: {c}" for c in critic_verdict.concerns]
+
         if template.gui_plan_name:
             # Drivable directly: fill B-PILOT's own form for the real plan
             # instead of writing a new file (see plan_renderer.render_command()).
-            command = plan_renderer.render_command(template, clean)
             message = f'Ready -- click "Open in form" to load {template.gui_plan_name} with these values.'
             if notes:
                 message += "\n" + "\n".join(notes)
@@ -441,10 +464,12 @@ def converse(
                     template_key=template.key,
                     raw_spec=raw_spec,
                     clean_spec=clean,
-                    gui_command=command,
+                    gui_command=command_for_review,
                     model=client.model,
                     tool_name=called_tool,
                     tool_calls=tool_calls,
+                    critic_flagged=critic_verdict.flagged if critic_verdict else None,
+                    critic_concerns=critic_verdict.concerns if critic_verdict else None,
                 ),
                 messages,
             )
@@ -469,6 +494,8 @@ def converse(
                 model=client.model,
                 tool_name=called_tool,
                 tool_calls=tool_calls,
+                critic_flagged=critic_verdict.flagged if critic_verdict else None,
+                critic_concerns=critic_verdict.concerns if critic_verdict else None,
             ),
             messages,
         )
