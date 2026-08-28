@@ -425,7 +425,7 @@ def converse(
                 messages,
             )
 
-        notes = _flag_device_substitutions(template, clean, request)
+        notes = _flag_device_substitutions(template, clean, request) + plan_spec.sanity_check(template, clean)
 
         if template.gui_plan_name:
             # Drivable directly: fill B-PILOT's own form for the real plan

@@ -386,3 +386,47 @@ def validate(template: Template, raw: dict, catalog: DeviceCatalog, blocks: dict
     if errors:
         raise ValidationError(errors)
     return clean
+
+
+# Conservative, deliberately coarse soft bounds by unit string -- a
+# code-level backstop for the same judgment call the system prompt already
+# asks the model to make voluntarily ("sanity-check the requested values...
+# say so plainly" in pipeline.py's system prompt), for the case where the
+# model's own check is missed. Not a substitute for real EPICS soft limits,
+# which this codebase never queries (P1 in design_principles.tex): a value
+# outside these bounds is merely unusual, not necessarily wrong, so this
+# never raises -- see `sanity_check` below.
+_SANITY_BOUNDS: dict[str, tuple[float, float]] = {
+    "mm": (-500.0, 500.0),
+    "deg": (-720.0, 720.0),
+    "s": (0.0, 3600.0),
+}
+
+
+def sanity_check(template: Template, clean: dict) -> list[str]:
+    """Return zero or more non-fatal warning strings for numeric values that
+    are schema-valid but fall outside a coarse, unit-keyed sanity range
+    (e.g. hundreds of meters of motor travel, or a sub-millisecond exposure).
+    Never raises and never mutates `clean` -- callers fold these into a
+    user-facing note alongside `_flag_device_substitutions`, the same way a
+    device substitution is disclosed rather than silently accepted or
+    rejected outright.
+    """
+    warnings: list[str] = []
+    for spec in template.param_specs:
+        if spec.dtype not in ("int", "float"):
+            continue
+        bound = _SANITY_BOUNDS.get((spec.units or "").strip().lower())
+        if bound is None:
+            continue
+        value = clean.get(spec.name)
+        if value is None:
+            continue
+        lo, hi = bound
+        if value < lo or value > hi:
+            warnings.append(
+                f"Note: {spec.name}={value} ({spec.units}) is well outside the "
+                f"normal range for this kind of value (expected roughly "
+                f"[{lo}, {hi}]) -- please double-check it before running."
+            )
+    return warnings
