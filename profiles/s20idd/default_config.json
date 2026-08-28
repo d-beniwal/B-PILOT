@@ -5,7 +5,7 @@
     "scans_standard.py",
     "scans_stationary.py"
   ],
-  "bluesky_startup": "from instrument.collection import *",
+  "bluesky_startup": "from instrument.collection import *\n%load_ext autoreload\n%autoreload 2",
   "keep_kernel_on_exit": true,
   "beamline": "s20idd",
   "use_screen": true,

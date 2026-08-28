@@ -726,11 +726,12 @@ class MainWindow(QtWidgets.QMainWindow):
             # Trusted immediately: this is exactly what LaunchDialog just wrote
             # to dm_experiment.txt before this kernel started.
             self._set_experiment_banner(self._last_launch_experiment, confirmed=True)
-            # Fresh kernel only -- an attached one already went through this
-            # under its own original launch (autoreload state is part of
-            # that same already-established IPython session).
-            self.console.run_autoreload_setup()
-            self.console.run_startup_commands()
+            # Startup commands are NOT dispatched here -- `started` fires as
+            # soon as the client's channels are wired, before the kernel
+            # handshake (see `_begin_handshake`) has actually completed, so
+            # the console isn't reliably ready to accept input yet. See
+            # `_on_console_ready` below, which fires once that handshake's
+            # kernel_info_reply actually arrives.
 
     def _start_experiment_probe(self) -> None:
         """Poll the attached kernel for DM_EXP until it resolves, then stop.
@@ -777,6 +778,26 @@ class MainWindow(QtWidgets.QMainWindow):
         """Kernel finished its handshake (idle) — safe to run and prompt visible."""
         if self.console.is_attached():
             self._set_toolbar_status("Reattached and ready.")
+        else:
+            # Fresh kernel only -- an attached one already went through this
+            # under its own original launch (autoreload state, if the
+            # profile's startup commands enable it, is part of that same
+            # already-established IPython session). Deferred to here (rather
+            # than `_on_console_started`) because this is the first point the
+            # console is actually confirmed ready to accept input -- see the
+            # comment in `_on_console_started`'s fresh-kernel branch.
+            #
+            # Also deferred by one event-loop tick (0 ms): this handler runs
+            # synchronously nested inside the shell-channel message-received
+            # callback that made `ready` fire in the first place (see
+            # `_on_shell_msg`/`ready.emit()` in console_panel.py). Calling
+            # `jupyter_widget.execute()` from there sends the request fine,
+            # but the console visibly sat on the FIRST line until the user
+            # pressed a key -- the widget's own screen update for that
+            # request's reply wasn't flushed until the next real event-loop
+            # iteration. Same idiom as `_start_console`/`_attach_console`
+            # above for kernel-related dispatches.
+            QtCore.QTimer.singleShot(0, self.console.run_startup_commands)
 
     def _verify_attach(self) -> None:
         """After attach settles: distinguish a busy kernel from a dead one."""

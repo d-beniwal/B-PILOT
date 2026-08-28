@@ -470,11 +470,12 @@ class ConfigDialog(QtWidgets.QDialog):
         )
         self._startup = QtWidgets.QPlainTextEdit()
         self._startup.setObjectName("mono")
-        self._startup.setFixedHeight(S.px(90))
+        self._startup.setFixedHeight(S.px(110))
         self._startup.setToolTip(
-            "MPE console startup is 'from instrument.collection import *' "
-            "(account-gated).  Queueserver uses 'from instrument.queueserver "
-            "import *'."
+            "Defaults to 'from instrument.collection import *' (account-"
+            "gated; queueserver uses 'from instrument.queueserver import *') "
+            "followed by the autoreload magics -- edit or reorder freely, "
+            "each line runs as its own command in order."
         )
         card.body.addWidget(self._startup)
 

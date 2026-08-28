@@ -16,7 +16,10 @@ change without editing code:
   rows in the file browser — edited via the Configuration dialog's Plan
   visibility card).
 * **Launch** — ``bluesky_startup``: the command(s) run automatically in the
-  console right after *Launch IPython* connects (one per line).
+  console right after *Launch IPython* connects (one per line, in order).
+  Defaults to loading Bluesky followed by IPython's autoreload extension —
+  edited per profile via the Configuration dialog's Launch Session tab
+  rather than hardcoded, so a beamline can reorder, drop, or add to them.
 * **Devices** — ``device_search_paths`` (directories scanned by
   :mod:`device_discovery`) and ``device_selection`` (per-name shown/hidden).
 
@@ -85,7 +88,11 @@ DEFAULTS: dict = {
     # rows in the plan-runner's file browser. Explicit, not "empty = show all"
     # — Select-all/Deselect-all in the Configuration dialog cover both extremes.
     "visible_plan_files": [_P.DEFAULT_PLAN_FILE],
-    "bluesky_startup": "from instrument.collection import *",
+    "bluesky_startup": (
+        "from instrument.collection import *\n"
+        "%load_ext autoreload\n"
+        "%autoreload 2"
+    ),
     # Console session persistence / reattach:
     "keep_kernel_on_exit": True,          # leave the kernel running when the GUI closes
     "last_kernel_connection_file": "",    # runtime state — path to reattach to

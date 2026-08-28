@@ -16,11 +16,11 @@ GUI instance calls :meth:`attach` with that connection file to reconnect to the
 same running kernel — including one with a plan still running in it.
 
 The kernel is NOT started until :meth:`start` (or :meth:`attach`) is called.
-On a fresh :meth:`start`, autoreload setup (see :meth:`run_autoreload_setup`)
-and then the configured startup command(s) (see :meth:`run_startup_commands`)
-run automatically once the kernel connects — the latter DOES touch
-hardware/EPICS if configured to.  :meth:`attach` never runs either: a
-reattached kernel already went through both once, under its own original
+On a fresh :meth:`start`, the configured startup command(s) (see
+:meth:`run_startup_commands`) run automatically once the kernel connects —
+this DOES touch hardware/EPICS if configured to (the default includes
+``from instrument.collection import *``).  :meth:`attach` never runs them: a
+reattached kernel already went through this once, under its own original
 launch.
 """
 from __future__ import annotations
@@ -103,19 +103,11 @@ def _rescan_output_bands(control) -> None:
     except Exception:  # noqa: BLE001
         pass
 
-# Fallback startup import if config is unavailable.  The real command is
-# user-configurable (Python → Configuration) — for MPE it defaults to
-# 'from instrument.collection import *'.  Running it CONNECTS TO HARDWARE /
-# EPICS, so it is only ever triggered by an explicit user action.
-BLUESKY_STARTUP = "from instrument.collection import *"
-
-# Autoreload setup, run once on a fresh kernel start only (see
-# run_autoreload_setup) -- a reattached kernel already ran this under its own
-# original launch, same as BLUESKY_STARTUP above.
-AUTORELOAD_STARTUP_COMMANDS = [
-    "%load_ext autoreload",
-    "%autoreload 2",
-]
+# Fallback startup command(s) if config is unavailable -- mirrors
+# config.DEFAULTS["bluesky_startup"]. Running the collection import CONNECTS
+# TO HARDWARE/EPICS, so this is only ever triggered by an explicit user
+# action (a fresh Launch IPython), never on attach.
+BLUESKY_STARTUP = "from instrument.collection import *\n%load_ext autoreload\n%autoreload 2"
 
 _PLACEHOLDER = (
     "IPython session not started.\n\n"
@@ -517,12 +509,20 @@ class ConsolePanel(QtWidgets.QWidget):
         # kernel; kernel_client.execute() would not echo.
         self.jupyter_widget.execute(source=src, hidden=False)
 
-    def run_code_sequence(self, blocks: list[str]) -> None:
+    def run_code_sequence(self, blocks: list[str], stop_on_error: bool = True) -> None:
         """Run `blocks` one at a time -- e.g. an auto-injected `det_startup`
-        ahead of the real plan, or the autoreload magics -- each as its OWN
-        kernel execution AND its own visible "In [n]:" prompt, only sending
-        the next block once the previous one's reply has been fully
+        ahead of the real plan, or the configured startup commands -- each as
+        its OWN kernel execution AND its own visible "In [n]:" prompt, only
+        sending the next block once the previous one's reply has been fully
         processed by this widget.
+
+        ``stop_on_error`` controls what happens when a block's reply comes
+        back with an error status: True (the default) aborts the rest of the
+        sequence -- the right call for det_startup-then-real-plan, where the
+        plan must never run if its prerequisite failed. False keeps going
+        regardless -- the right call for independent startup commands (e.g.
+        the collection import failing shouldn't also skip the autoreload
+        magics), see :meth:`run_startup_commands`.
 
         Two things this avoids:
 
@@ -571,8 +571,9 @@ class ConsolePanel(QtWidgets.QWidget):
 
         def _on_executed(msg) -> None:
             self.executed.disconnect(_on_executed)
-            if msg.get("content", {}).get("status") == "ok":
-                self.run_code_sequence(tail)
+            ok = msg.get("content", {}).get("status") == "ok"
+            if ok or not stop_on_error:
+                self.run_code_sequence(tail, stop_on_error=stop_on_error)
 
         self.executed.connect(_on_executed)
         self.run_code(head)
@@ -675,35 +676,27 @@ class ConsolePanel(QtWidgets.QWidget):
         self._busy = False
         self.executed.emit(msg)
 
-    def run_autoreload_setup(self) -> None:
-        """Load IPython's autoreload extension and set it to mode 2.
-
-        Caller's responsibility to only call this on a fresh :meth:`start`,
-        same as :meth:`run_startup_commands` — a reattached kernel already
-        ran this once under its own original launch, so there's no need to
-        repeat it. Uses :meth:`run_code_sequence` (not a bare loop of
-        :meth:`run_code`) so each magic gets its own visible "In [n]:" cell
-        instead of one collapsing into the other (see that method's
-        docstring).
-        """
-        self.run_code_sequence(list(AUTORELOAD_STARTUP_COMMANDS))
-
     def run_startup_commands(self) -> None:
-        """Run the configured startup command(s), one console cell per line.
+        """Run the configured startup command(s), one console cell per line,
+        each waiting for the previous one to finish before the next runs.
 
         Uses the ``bluesky_startup`` config value (Python → Configuration →
         Launch Session), falling back to :data:`BLUESKY_STARTUP` if unset
-        (CONNECTS TO HARDWARE if configured to).  Called automatically once,
-        right after a fresh :meth:`start` connects — never after
-        :meth:`attach` (see ``MainWindow._on_console_started``).
+        (CONNECTS TO HARDWARE if configured to).  Called automatically once
+        the kernel handshake completes on a fresh :meth:`start` (see
+        ``MainWindow._on_console_ready``) — never after :meth:`attach`.  Uses
+        :meth:`run_code_sequence` with ``stop_on_error=False``: these are
+        independent commands (e.g. the collection import failing shouldn't
+        also skip the autoreload magics), unlike the det_startup-then-plan
+        chain that method's default is built around, so one line's failure
+        must never swallow the rest — see that method's docstring for why
+        firing them back-to-back without waiting at all is unsafe regardless.
         """
         cmd = config.get("bluesky_startup")
         if not cmd or not cmd.strip():
             cmd = BLUESKY_STARTUP
-        for line in cmd.splitlines():
-            line = line.strip()
-            if line:
-                self.run_code(line)
+        lines = [line.strip() for line in cmd.splitlines() if line.strip()]
+        self.run_code_sequence(lines, stop_on_error=False)
 
     def detach(self) -> None:
         """Disconnect the GUI but LEAVE the kernel running (so it can be reattached).
