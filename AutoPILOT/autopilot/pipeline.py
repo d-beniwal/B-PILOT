@@ -18,13 +18,13 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import device_catalog, interaction_history, plan_catalog, plan_context, plan_renderer, plan_spec, tools
+from . import device_catalog, interaction_history, plan_catalog, plan_context, plan_renderer, plan_spec, queue_proposal, tools
 from ._bpilot_path import ensure_bpilot_on_path
 from .llm_client import ArgoClient
 
 ensure_bpilot_on_path()
 
-from B_PILOT import config as bpilot_config  # noqa: E402
+from B_PILOT import agent_proposals, config as bpilot_config  # noqa: E402
 
 GENERATED_DIR = Path(__file__).resolve().parent.parent / "generated_plans"
 
@@ -73,6 +73,11 @@ class PlanResult:
     # (see `converse()`'s `record` param) -- lets a caller log a later human
     # action (e.g. "opened in form") back against this exact turn.
     turn_id: str | None = None
+    # Set only when the model set `add_to_queue: true` on a GUI-drivable
+    # proposal and B_PILOT.agent_proposals.add_pending() succeeded -- see
+    # _stage_queue_proposal(). None otherwise (including when staging was
+    # attempted but no structured queue item could be built).
+    queued_proposal_id: str | None = None
 
 
 def _build_system_prompt(catalog) -> str:
@@ -432,6 +437,22 @@ def converse(
             # instead of writing a new file (see plan_renderer.render_command()).
             command = plan_renderer.render_command(template, clean)
             message = f'Ready -- click "Open in form" to load {template.gui_plan_name} with these values.'
+
+            queued_proposal_id = None
+            if raw_spec.get("add_to_queue"):
+                queued_proposal_id = _stage_queue_proposal(template, clean, catalog, request, command, notes)
+                if queued_proposal_id:
+                    notes = notes + [
+                        "Staged for human approval in the queue panel's \"Pending AI proposals\" "
+                        "list -- it will not run until a human approves it there."
+                    ]
+                else:
+                    notes = notes + [
+                        "Could not stage this for the queue automatically (no structured queue "
+                        "item could be built for this plan) -- use \"Open in form\" and Add to "
+                        "Queue by hand instead."
+                    ]
+
             if notes:
                 message += "\n" + "\n".join(notes)
             return (
@@ -445,6 +466,7 @@ def converse(
                     model=client.model,
                     tool_name=called_tool,
                     tool_calls=tool_calls,
+                    queued_proposal_id=queued_proposal_id,
                 ),
                 messages,
             )
@@ -514,6 +536,35 @@ def generate_plan(
         request, history=None, profile=profile, client=client, temperature=temperature, record=record
     )
     return result
+
+
+def _stage_queue_proposal(template, clean: dict, catalog, request: str, command: str, notes: list[str]) -> str | None:
+    """Stage a `pending` proposal in `B_PILOT.agent_proposals` for a human to
+    later approve or reject in the queue panel -- never enqueues anything
+    itself. Returns the new proposal's id, or `None` if staging failed or
+    (for the `qs` backend) no structured queue item could be built for this
+    template. See `queue_proposal.py`/`agent_proposals.py` module docstrings
+    for the full contract.
+    """
+    backend = bpilot_config.get("queue_backend") or "native"
+    area_detectors = queue_proposal.area_detectors_for(template, clean)
+    qs_item = queue_proposal.build_qs_item(template, clean) if backend == "qs" else None
+    if backend == "qs" and qs_item is None:
+        return None
+    try:
+        proposal = agent_proposals.add_pending(
+            catalog.beamline,
+            backend=backend,
+            template_key=template.key,
+            request_summary=request,
+            command=command,
+            notes="\n".join(notes),
+            area_detectors=area_detectors,
+            qs_item=qs_item,
+        )
+    except Exception:  # noqa: BLE001 -- staging is a courtesy, never blocks the proposal itself
+        return None
+    return proposal["id"]
 
 
 def _flag_device_substitutions(template, clean: dict, request: str) -> list[str]:

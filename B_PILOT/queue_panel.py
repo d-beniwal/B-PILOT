@@ -30,6 +30,7 @@ from PyQt5 import QtCore
 from PyQt5 import QtGui
 from PyQt5 import QtWidgets
 
+from . import agent_proposals
 from . import command_builder
 from . import config
 from . import det_startup_state
@@ -67,6 +68,102 @@ def _short(command: str, limit: int = 80) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
+class PendingProposalsPanel(QtWidgets.QWidget):
+    """A small, self-hiding list of AutoPILOT-proposed (``pending``) queue
+    items awaiting human approval or rejection (see
+    :mod:`agent_proposals`) -- embedded at the top of both
+    :class:`NativeQueuePanel` and :class:`QSQueuePanel`.
+
+    This widget never calls a hardware-dispatch function itself: Approve
+    calls `on_approve(proposal)`, a callback the owning panel supplies that
+    invokes the *exact same* ``add()`` method a human's own "Add to Queue"
+    click already uses (see each panel's own ``add()``). This widget's own
+    responsibility ends at reading/writing ``agent_proposals``' pending
+    list and displaying it.
+    """
+
+    def __init__(self, on_approve, parent=None) -> None:
+        super().__init__(parent)
+        self._on_approve = on_approve
+        self._rows: list[dict] = []
+        self._build_ui()
+        self.setVisible(False)  # no proposals yet -- hidden until _refresh finds one
+
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._refresh)
+        self._timer.start()
+        self._refresh()
+
+    def _build_ui(self) -> None:
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 4)
+        lay.setSpacing(2)
+
+        header = QtWidgets.QLabel("🤖 Pending AI proposals")
+        header.setStyleSheet(f"font-weight:bold; color:{S.MUTED};")
+        lay.addWidget(header)
+
+        self._list = QtWidgets.QListWidget()
+        self._list.setMaximumHeight(S.px(70))
+        self._list.setToolTip(
+            "Plans AutoPILOT proposed queuing on the user's explicit request. "
+            "Nothing here runs, or is added to the real queue, until you "
+            "approve it."
+        )
+        lay.addWidget(self._list)
+
+        row = QtWidgets.QHBoxLayout()
+        approve = S.primary_btn("✓ Approve")
+        approve.clicked.connect(self._approve_selected)
+        reject = QtWidgets.QPushButton("✗ Reject")
+        reject.clicked.connect(self._reject_selected)
+        row.addWidget(approve)
+        row.addWidget(reject)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+    @staticmethod
+    def _beamline() -> str:
+        return config.get("beamline")
+
+    def _refresh(self) -> None:
+        self._rows = agent_proposals.list_pending(self._beamline())
+        self.setVisible(bool(self._rows))
+        if not self._rows:
+            return
+        selected = self._list.currentRow()
+        self._list.clear()
+        for p in self._rows:
+            label = f"[{p.get('backend')}] {p.get('template_key')} -- {_short(p.get('request_summary', ''), 60)}"
+            item = QtWidgets.QListWidgetItem(label)
+            item.setToolTip(p.get("command", ""))
+            self._list.addItem(item)
+        if 0 <= selected < self._list.count():
+            self._list.setCurrentRow(selected)
+
+    def _selected_proposal(self) -> dict | None:
+        row = self._list.currentRow()
+        if row < 0 or row >= len(self._rows):
+            return None
+        return self._rows[row]
+
+    def _approve_selected(self) -> None:
+        proposal = self._selected_proposal()
+        if proposal is None:
+            return
+        self._on_approve(proposal)
+        agent_proposals.set_status(self._beamline(), proposal["id"], agent_proposals.APPROVED)
+        self._refresh()
+
+    def _reject_selected(self) -> None:
+        proposal = self._selected_proposal()
+        if proposal is None:
+            return
+        agent_proposals.set_status(self._beamline(), proposal["id"], agent_proposals.REJECTED)
+        self._refresh()
+
+
 class NativeQueuePanel(QtWidgets.QWidget):
     """Table view of the persistent plan queue (one per beamline session)."""
 
@@ -93,6 +190,9 @@ class NativeQueuePanel(QtWidgets.QWidget):
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
+
+        self._pending_panel = PendingProposalsPanel(self._approve_pending, self)
+        lay.addWidget(self._pending_panel)
 
         self._state_lbl = QtWidgets.QLabel("Idle")
         self._state_lbl.setAlignment(QtCore.Qt.AlignCenter)
@@ -156,6 +256,12 @@ class NativeQueuePanel(QtWidgets.QWidget):
         """
         queue_store.add(self._beamline(), command, notes, area_detectors=area_detectors or [])
         self._refresh()
+
+    def _approve_pending(self, proposal: dict) -> None:
+        """`PendingProposalsPanel`'s approve callback -- calls this class's
+        own `add()` above, the identical call a human's "Add to Queue"
+        click already makes; no new call site."""
+        self.add(proposal.get("command", ""), proposal.get("notes", ""), area_detectors=proposal.get("area_detectors"))
 
     # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -346,6 +452,9 @@ class QSQueuePanel(QtWidgets.QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
+        self._pending_panel = PendingProposalsPanel(self._approve_pending, self)
+        lay.addWidget(self._pending_panel)
+
         self._state_lbl = QtWidgets.QLabel("Idle")
         self._state_lbl.setAlignment(QtCore.Qt.AlignCenter)
         lay.addWidget(self._state_lbl)
@@ -408,6 +517,24 @@ class QSQueuePanel(QtWidgets.QWidget):
         to the queue server's queue."""
         qs_client.item_add(item)
         self._refresh()
+
+    def _approve_pending(self, proposal: dict) -> None:
+        """`PendingProposalsPanel`'s approve callback -- calls this class's
+        own `add()` above, the identical call a human's "Add to Queue"
+        click already makes; no new call site. Unlike the native backend,
+        an approved QS proposal does *not* get a det_startup item
+        auto-injected the way `main_window._on_queue`'s human-driven QS
+        path does -- a known, narrow, non-hazardous gap (a missing
+        det_startup makes `prescan_checks()` fail loudly, not silently
+        misbehave) rather than replicating that logic's device-argument
+        bookkeeping a second time here."""
+        item = proposal.get("qs_item")
+        if item is None:
+            return  # nothing structured to approve; should not normally happen
+        item = dict(item)
+        if proposal.get("notes"):
+            item["meta"] = {**item.get("meta", {}), "notes": proposal["notes"]}
+        self.add(item)
 
     # ── Helpers ───────────────────────────────────────────────────────────────────
 

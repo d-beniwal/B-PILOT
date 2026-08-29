@@ -141,6 +141,22 @@ def build_tool_schema(template: Template, catalog: DeviceCatalog, blocks: dict) 
         }
         required.append("axes")
 
+    if template.gui_plan_name:
+        # Only offered for GUI-drivable templates -- a brand-new drafted
+        # file (no gui_plan_name) has no reviewed queue item to stage yet;
+        # a human must promote it into instrument/plans/ first, same as
+        # today. See pipeline.py's terminal-proposal handling and
+        # B_PILOT/agent_proposals.py for what this actually does (stage a
+        # *pending* proposal for human approval, never enqueue directly).
+        properties["add_to_queue"] = {
+            "type": "boolean",
+            "description": (
+                "Set true only if the user explicitly asked to queue, "
+                "enqueue, or add this to the run queue -- not merely to "
+                "draft, build, or open it in the form. Defaults to false."
+            ),
+        }
+
     return {
         "name": f"propose_{template.key}_plan",
         "description": f"Propose concrete parameter values for a {template.title} ({template.description})",

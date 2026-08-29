@@ -54,7 +54,7 @@ def _typespec(spec) -> str:
     return f"{base} [{spec.units}]" if spec.units else base
 
 
-def _default_code(spec, value) -> str:
+def default_code(spec, value) -> str:
     if spec.dtype in ("device", "block"):
         # Both are real Python identifiers (an ophyd object or a
         # building-block function) bound via imports -- never a quoted string.
@@ -65,17 +65,17 @@ def _default_code(spec, value) -> str:
 
 
 def _signature_default_code(spec, value) -> str:
-    """Like `_default_code`, except a `device_list` param defaults to `None`
+    """Like `default_code`, except a `device_list` param defaults to `None`
     in a *function signature* -- a literal list there would be Python's
     classic mutable-default-argument footgun, evaluated once at def time and
     shared across every call. `render()` pairs this with a body-line guard
     that rebuilds the real default list fresh on each call instead. Only
     `render()`'s signature line needs this; `render_command()` builds a call
-    expression, not a signature, so `_default_code` is safe there as-is.
+    expression, not a signature, so `default_code` is safe there as-is.
     """
     if spec.dtype == "device_list":
         return "None"
-    return _default_code(spec, value)
+    return default_code(spec, value)
 
 
 def _device_names_used(template: Template, clean: dict) -> list[str]:
@@ -88,7 +88,7 @@ def _device_names_used(template: Template, clean: dict) -> list[str]:
     return sorted(set(names))
 
 
-def _axes_tokens(template: Template, clean: dict) -> list[str]:
+def axes_tokens(template: Template, clean: dict) -> list[str]:
     """Flatten ``clean["__axes__"]`` (see plan_spec.py's `_validate_axes_item`)
     into positional ``RE(...)`` tokens, mirroring
     B_PILOT/skeleton_widgets.py's ``_MotorRow.tokens()``/``MotorRowsWidget``
@@ -113,7 +113,7 @@ def render_command(template: Template, clean: dict) -> str:
     """Return an ``RE(<real_plan>(...))`` string for a GUI-drivable template
     (``template.gui_plan_name`` set) -- fed straight into B-PILOT's own
     ``PlanRunnerPanel.load_from_command()`` rather than a generated file.
-    Reuses ``_default_code`` so device/device_list/block values come out as
+    Reuses ``default_code`` so device/device_list/block values come out as
     bare identifiers (real ophyd objects / functions), exactly what that
     AST-based restore expects.
 
@@ -123,9 +123,9 @@ def render_command(template: Template, clean: dict) -> str:
     B_PILOT/plan_runner.py, which expects to find them first and chunk them by
     row width.
     """
-    args = [f"{spec.name}={_default_code(spec, clean.get(spec.name))}" for spec in template.param_specs]
+    args = [f"{spec.name}={default_code(spec, clean.get(spec.name))}" for spec in template.param_specs]
     if template.skeleton:
-        args = _axes_tokens(template, clean) + args
+        args = axes_tokens(template, clean) + args
     return f"RE({template.gui_plan_name}({', '.join(args)}))"
 
 
@@ -143,7 +143,7 @@ def render(template: Template, clean: dict, catalog: DeviceCatalog, summary: str
         doc_lines.append(f"        {spec.short} :: {spec.long}")
         doc_lines.append("")
         if spec.dtype == "device_list":
-            default_literal = _default_code(spec, clean.get(spec.name))
+            default_literal = default_code(spec, clean.get(spec.name))
             guard_lines.append(f"    {spec.name} = list({spec.name}) if {spec.name} else {default_literal}")
 
     slug = clean.get("motor") or (clean.get("scalers") or [None])[0] or template.wrapper_name_hint
