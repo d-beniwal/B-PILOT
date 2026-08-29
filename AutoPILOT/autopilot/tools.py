@@ -43,6 +43,7 @@ READ_RUN_DATA_TOOL_NAME = "read_run_data"
 LIST_DIRECTORY_TOOL_NAME = "list_directory"
 SEARCH_CODEBASE_TOOL_NAME = "search_codebase"
 READ_SOURCE_FILE_TOOL_NAME = "read_source_file"
+RECALL_SIMILAR_REQUESTS_TOOL_NAME = "recall_similar_requests"
 
 
 def build_list_devices_schema() -> dict:
@@ -758,3 +759,46 @@ def read_source_file(path: str, start_line: int | None, end_line: int | None) ->
         "truncated": truncated,
         "text": text,
     }
+
+
+# ---------------------------------------------------------------------------
+# recall_similar_requests -- grounds a new request in this beamline's own
+# logged interaction history (interaction_history.py), rather than treating
+# every conversation as starting from zero. Imports interaction_history
+# lazily (inside the function, not at module top) since that module already
+# imports this one (for `redact`) -- a module-level import here would be
+# circular.
+# ---------------------------------------------------------------------------
+
+def build_recall_similar_requests_schema() -> dict:
+    return {
+        "name": RECALL_SIMILAR_REQUESTS_TOOL_NAME,
+        "description": (
+            "Look up past requests on this beamline that were similar to the "
+            "current one AND that the operator actually opened in the form "
+            "afterward -- the clearest available signal a past draft was "
+            "actually good, not just schema-valid. Use this for a request "
+            "that resembles something likely asked before, to ground your "
+            "answer in what actually worked previously rather than guessing "
+            "fresh every time. Returns up to two matches; an empty list "
+            "means no sufficiently similar prior request was found, not an "
+            "error -- proceed normally in that case."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The current request text (or your own short paraphrase of it) to find similar past requests for.",
+                }
+            },
+            "required": ["query"],
+        },
+    }
+
+
+def recall_similar_requests(beamline: str, query: str) -> dict:
+    from . import interaction_history  # lazy: avoids a circular import with interaction_history's `from . import tools`
+
+    matches = interaction_history.find_similar(beamline, query, limit=2)
+    return {"matches": [interaction_history.summarize_candidate(m) for m in matches]}

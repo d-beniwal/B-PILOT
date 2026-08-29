@@ -180,3 +180,72 @@ def read_day(beamline: str, day: str) -> list[dict]:
     except OSError:
         pass
     return entries
+
+
+# ---------------------------------------------------------------------------
+# Grounded retrieval over this log -- turns the write-only history above
+# into something a live conversation can actually draw on. Deliberately
+# lexical (token-set overlap), not embedding/vector-based: no new
+# dependency, no index to keep in sync, and every candidate this returns is
+# already redacted (it was redacted before being written, above). See
+# `tools.recall_similar_requests` for the read-only lookup tool that
+# exposes this to the model -- like every other lookup tool, the model
+# decides whether to call it; nothing here is auto-injected into every turn.
+# ---------------------------------------------------------------------------
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize(text: str) -> set[str]:
+    return set(_TOKEN_RE.findall((text or "").lower()))
+
+
+def find_similar(beamline: str, request: str, limit: int = 2, max_days: int = 30) -> list[dict]:
+    """Past recorded `"turn"` entries for `beamline`, scored by lexical
+    token-overlap (Jaccard) against `request`, restricted to turns that
+    both succeeded (`ok`) and were later opened in the form
+    (`action="opened_in_form"`) -- the same positive signal this log's own
+    design already treats as the clearest available evidence a draft was
+    actually good, not just schema-valid. Returns up to `limit` entries,
+    highest-overlap first (ties broken by recency); `max_days` bounds how
+    far back to scan so a long-lived log doesn't make every call slower
+    over time.
+    """
+    query_tokens = _tokenize(request)
+    if not query_tokens:
+        return []
+
+    scored: list[tuple[float, float, dict]] = []
+    for day in list_days(beamline)[:max_days]:
+        entries = read_day(beamline, day)
+        opened_turn_ids = {
+            e.get("turn_id")
+            for e in entries
+            if e.get("kind") == "outcome" and e.get("action") == "opened_in_form"
+        }
+        for e in entries:
+            if e.get("kind") != "turn" or not e.get("ok") or e.get("turn_id") not in opened_turn_ids:
+                continue
+            candidate_tokens = _tokenize(e.get("request", ""))
+            if not candidate_tokens:
+                continue
+            overlap = len(query_tokens & candidate_tokens) / len(query_tokens | candidate_tokens)
+            if overlap > 0:
+                scored.append((overlap, e.get("ts", 0.0), e))
+
+    scored.sort(key=lambda c: (c[0], c[1]), reverse=True)
+    return [e for _score, _ts, e in scored[:limit]]
+
+
+def summarize_candidate(entry: dict) -> dict:
+    """The subset of a `find_similar` match worth showing the model --
+    never the full raw entry (which also carries token-usage/tool-trace
+    bookkeeping irrelevant to grounding a new answer)."""
+    return {
+        "request": entry.get("request"),
+        "template_key": entry.get("template_key"),
+        "clean_spec": entry.get("clean_spec"),
+        "gui_command": entry.get("gui_command"),
+        "filepath": entry.get("filepath"),
+        "when": time.strftime("%Y-%m-%d", time.localtime(entry.get("ts", 0))) if entry.get("ts") else None,
+    }
