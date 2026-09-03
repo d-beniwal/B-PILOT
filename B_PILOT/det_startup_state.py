@@ -35,6 +35,7 @@ except ImportError:  # non-POSIX (not expected on beamline Linux/macOS)
 
 from . import config
 from . import kernel_session as ks
+from .plan_parser import file_defines_function
 from .plan_parser import file_to_module
 
 _DET_STARTUP_MODULE_FILE = "auxiliary_ad.py"
@@ -154,9 +155,38 @@ def _filter_unstarted(started: set, names: list) -> list:
     return result
 
 
-def _det_startup_module() -> str:
+def _det_startup_source() -> str | None:
+    """Absolute path of the file defining ``det_startup``, or ``None``.
+
+    ``det_startup`` is an MPE concept: ``prescan_checks()`` in
+    ``instrument/plans/auxiliary_ad.py`` hard-fails for a detector that was
+    never started, which is why B-PILOT injects the call itself. Other
+    instruments B-PILOT can drive (an APS BITS package such as 3-ID-C's
+    ``id3c``) have no such plan at all.
+
+    Without this check the module path was computed from ``plans_dir``
+    unconditionally, so an instrument with no ``auxiliary_ad.py`` got a
+    fabricated import line (``from id3c.auxiliary_ad import det_startup``)
+    injected ahead of its real plan. That line raises ``ImportError`` in the
+    kernel, and because ``ConsolePanel.run_code_sequence()`` only proceeds
+    when the previous block succeeded, the real plan would then never run.
+    Returning ``None`` makes the whole injection a no-op instead.
+    """
     plans_dir = config.get("plans_dir")
+    if not plans_dir:
+        return None
     abs_path = os.path.join(plans_dir, _DET_STARTUP_MODULE_FILE)
+    if not os.path.isfile(abs_path):
+        return None
+    return abs_path if file_defines_function(abs_path, "det_startup") else None
+
+
+def _det_startup_module() -> str | None:
+    """Module path for the ``det_startup`` import line, or ``None`` if this
+    instrument has no ``det_startup`` plan (see :func:`_det_startup_source`)."""
+    abs_path = _det_startup_source()
+    if abs_path is None:
+        return None
     return file_to_module(abs_path, config.get("import_root"))
 
 
@@ -165,10 +195,12 @@ def build_startup_commands(beamline: str, detector_names: list) -> str:
     block for every not-yet-started name in `detector_names`, marking them
     started as a side effect. Returns "" if nothing needs starting.
     """
+    module = _det_startup_module()
+    if module is None:
+        return ""      # instrument has no det_startup plan -- nothing to inject
     unstarted = filter_unstarted(beamline, detector_names)
     if not unstarted:
         return ""
-    module = _det_startup_module()
     lines = [f"from {module} import det_startup"]
     lines.extend(f"RE(det_startup(det={name}))" for name in unstarted)
     mark_started(beamline, unstarted)
@@ -191,6 +223,8 @@ def build_startup_items(beamline: str, detector_names: list) -> list[dict]:
     queued item's detector-startup need is checked once, when it's added,
     not re-checked right before it runs.
     """
+    if _det_startup_source() is None:
+        return []      # instrument has no det_startup plan -- nothing to inject
     unstarted = filter_unstarted_qs(beamline, detector_names)
     if not unstarted:
         return []

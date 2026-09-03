@@ -1,0 +1,39 @@
+{
+  "default_plan_file": "setup_june_26.py",
+  "visible_plan_files": [
+    "user/s3idc_plans/setup_june_26.py",
+    "user/s3idc_gui/flyscan_3idc.py",
+    "user/s3idc_gui/sim_plans.py"
+  ],
+  "bluesky_startup": "from id3c.startup import *\n%load_ext autoreload\n%autoreload 2",
+  "embedded_starter_script": "embedded_kernel_starter_3idc.sh",
+  "keep_kernel_on_exit": true,
+  "beamline": "3idc",
+  "use_screen": true,
+  "dm_experiment": "",
+  "setup_file": "exp_setup.yml",
+  "ui_scale": 1.0,
+  "theme": "light",
+  "font_family": "system",
+  "autopilot_enabled": false,
+  "midas_bridge_enabled": false,
+  "queue_backend": "native",
+  "device_search_paths": [],
+  "device_selection": {},
+  "device_category_overrides": {},
+  "plan_building_search_paths": [],
+  "suspender_search_paths": [],
+  "switch_to_search_paths": [],
+  "plan_building_blocks": {},
+  "databroker_catalog": "raw",
+  "databroker_uri": "http://sn.xray.aps.anl.gov:8000/raw",
+  "databroker_nexus_dir": "",
+  "viewer_export_fields": {
+    "summary": true,
+    "start_metadata": true,
+    "stop_metadata": true,
+    "notes": true,
+    "file_references": true,
+    "data_preview": false
+  }
+}

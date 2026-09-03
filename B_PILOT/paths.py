@@ -27,6 +27,18 @@ Two anchors:
   records why, so the GUI can warn at startup instead of silently falling
   back (see ``main_window.py``'s startup check).
 
+Two project **layouts** are recognized, reported as :data:`BLUESKY_LAYOUT`:
+
+* ``"mpe"`` — the ``mpe_bluesky`` tree B-PILOT was written for
+  (``instrument/`` at the root). Everything derived below keeps exactly the
+  values it always had, and this is the only layout the auto-detect walk
+  looks for.
+* ``"bits"`` — an APS **BITS** instrument such as ``3idc-bits`` (package
+  ``id3c``), whose code lives in ``src/<pkg>/`` with no ``instrument/``
+  directory at all. Reached only via an explicit ``bluesky_root`` override,
+  never by the walk. The src-layout package plays ``instrument/``'s role, so
+  ``ICONFIG``/``PLANS_DIR``/``IMPORT_ROOT`` resolve into it instead.
+
 Import this module everywhere instead of recomputing ``os.path.dirname(...)``
 chains locally.
 """
@@ -61,16 +73,17 @@ _ROOT_MARKER_DIRS = ("instrument",)                        # must all be present
 _ROOT_MARKER_FILES = ("blueskyStarter.sh", "qserver.sh")   # at least one present
 
 
-def _bluesky_root_error(path: str) -> str | None:
+def _mpe_root_error(path: str) -> str | None:
     """``None`` if ``path`` looks like the ``mpe_bluesky`` Bluesky root: an
     ``instrument/`` subdirectory plus at least one of the known root scripts.
     Otherwise a human-readable reason it doesn't qualify.
 
-    Shared by the auto-detect walk below and by validation of an explicit
-    ``bluesky_root`` profile override, so both use the same definition of "a
-    real Bluesky root" — an override that fails this check is rejected
-    rather than silently trusted, and the reason is surfaced (see
-    :func:`_resolve_bluesky_root_override`) instead of swallowed.
+    This is the ONLY layout the auto-detect walk (:func:`_find_bluesky_root`)
+    recognizes, so B-PILOT nested inside an ``mpe_bluesky`` checkout resolves
+    exactly as it always has. The BITS layout below is reachable only through
+    an explicit ``bluesky_root`` profile override — deliberately, since its
+    markers are generic enough that a walk-up could otherwise stop at an
+    unrelated ancestor directory.
     """
     if not os.path.isdir(path):
         return "the directory does not exist"
@@ -82,9 +95,78 @@ def _bluesky_root_error(path: str) -> str | None:
     return None
 
 
+def _bits_package_dir(path: str) -> str | None:
+    """The ``src/<pkg>/`` instrument package of an APS **BITS** checkout.
+
+    A BITS instrument (e.g. ``3idc-bits``, package ``id3c``) has no
+    ``instrument/`` directory: its code lives in a src-layout package that
+    carries both ``startup.py`` (the ``from <pkg>.startup import *`` entry
+    point) and ``configs/iconfig.yml``. Requiring *both* keeps this from
+    matching an arbitrary src-layout Python project.
+
+    Returns the absolute package directory, or ``None`` if ``path`` isn't a
+    BITS root.
+    """
+    src = os.path.join(path, "src")
+    if not os.path.isdir(src):
+        return None
+    try:
+        entries = sorted(os.scandir(src), key=lambda e: e.name)
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.is_dir() or entry.name.startswith((".", "_")):
+            continue
+        if os.path.isfile(os.path.join(entry.path, "startup.py")) and os.path.isfile(
+            os.path.join(entry.path, "configs", "iconfig.yml")
+        ):
+            return entry.path
+    return None
+
+
+def _bits_root_error(path: str) -> str | None:
+    """``None`` if ``path`` is a BITS root (see :func:`_bits_package_dir`),
+    else a human-readable reason it doesn't qualify."""
+    if not os.path.isdir(path):
+        return "the directory does not exist"
+    if _bits_package_dir(path) is None:
+        return "it has no src/<package>/ holding both startup.py and configs/iconfig.yml"
+    return None
+
+
+def _bluesky_root_error(path: str) -> str | None:
+    """``None`` if ``path`` is a Bluesky root of *either* recognized layout.
+
+    Used to validate an explicit ``bluesky_root`` profile override, so a
+    typo'd path is rejected rather than silently trusted, and the reason is
+    surfaced (see :func:`_resolve_bluesky_root_override`) instead of
+    swallowed. When neither layout matches, both reasons are reported — the
+    user knows which layout they meant, and a single combined message avoids
+    guessing wrong about their intent.
+    """
+    mpe_reason = _mpe_root_error(path)
+    if mpe_reason is None:
+        return None
+    bits_reason = _bits_root_error(path)
+    if bits_reason is None:
+        return None
+    if mpe_reason == bits_reason:      # e.g. the directory does not exist
+        return mpe_reason
+    return f"it is neither an mpe_bluesky root ({mpe_reason}) nor a BITS root ({bits_reason})"
+
+
+def _layout_of(path: str) -> str:
+    """``"mpe"`` or ``"bits"`` — which layout ``path`` is. ``mpe`` wins a tie
+    (and is the fallback for a path that is neither), so every pre-existing
+    deployment keeps exactly the derived paths it had before BITS support."""
+    if _mpe_root_error(path) is None:
+        return "mpe"
+    return "bits" if _bits_root_error(path) is None else "mpe"
+
+
 def _find_bluesky_root(start: str) -> str:
     """Walk up from ``start`` to the ``mpe_bluesky`` Bluesky root (see
-    :func:`_bluesky_root_error`).
+    :func:`_mpe_root_error`).
 
     Falls back to two levels above the GUI (the ``<root>/B-PILOT/B_PILOT``
     layout) if no marker is found, so the GUI still works before the project
@@ -92,7 +174,7 @@ def _find_bluesky_root(start: str) -> str:
     """
     cur = start
     while True:
-        if _bluesky_root_error(cur) is None:
+        if _mpe_root_error(cur) is None:
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:          # reached the filesystem root — stop
@@ -164,18 +246,41 @@ def _resolve_bluesky_root_override() -> tuple[str | None, str | None]:
 _override_root, BLUESKY_ROOT_OVERRIDE_ERROR = _resolve_bluesky_root_override()
 BLUESKY_ROOT = _override_root or _find_bluesky_root(GUI_DIR)
 
-INSTRUMENT_DIR = _abs(BLUESKY_ROOT, "instrument")
-PROJECT_USER_DIR = _abs(BLUESKY_ROOT, "user")
-ICONFIG = _abs(INSTRUMENT_DIR, "iconfig.yml")
-BLUESKY_STARTER = _abs(BLUESKY_ROOT, "blueskyStarter.sh")
+# Which project layout BLUESKY_ROOT is (see _layout_of).  Everything below
+# branches on this; "mpe" reproduces the original values exactly.
+BLUESKY_LAYOUT = _layout_of(BLUESKY_ROOT)
 
-# The real MPE plan directory, scanned by the plan-runner's file browser.
-PLANS_DIR = _abs(INSTRUMENT_DIR, "plans")
+if BLUESKY_LAYOUT == "bits":
+    # APS BITS instrument (e.g. 3idc-bits, package id3c).  The src-layout
+    # package plays the role mpe_bluesky's ``instrument/`` does.
+    _BITS_PKG = _bits_package_dir(BLUESKY_ROOT) or _abs(BLUESKY_ROOT, "src")
+    INSTRUMENT_DIR = _BITS_PKG                              # src/<pkg>
+    PROJECT_USER_DIR = _abs(_BITS_PKG, "user")              # src/<pkg>/user
+    ICONFIG = _abs(_BITS_PKG, "configs", "iconfig.yml")
+    BLUESKY_STARTER = _abs(BLUESKY_ROOT, "blueskyStarter.sh")   # unused here
+    # The package ROOT, not its ``plans/`` subdirectory: a BITS instrument
+    # keeps library plans in ``<pkg>/plans/`` but user/campaign plans in
+    # ``<pkg>/user/``, and the plan-runner scans a single tree.  Scoping the
+    # scan to the package root reaches both; which files are actually offered
+    # is the ``visible_plan_files`` whitelist's job, exactly as on MPE.
+    PLANS_DIR = _BITS_PKG
+    # module = path relative to ``src/`` -> ``id3c.plans.foo``,
+    # ``id3c.user.s3idc_plans.bar``.
+    IMPORT_ROOT = os.path.dirname(_BITS_PKG)
+else:
+    INSTRUMENT_DIR = _abs(BLUESKY_ROOT, "instrument")
+    PROJECT_USER_DIR = _abs(BLUESKY_ROOT, "user")
+    ICONFIG = _abs(INSTRUMENT_DIR, "iconfig.yml")
+    BLUESKY_STARTER = _abs(BLUESKY_ROOT, "blueskyStarter.sh")
 
-# Root the generated ``from <module> import <plan>`` line is resolved against
-# (module = path of the plan file relative to this root).  With IMPORT_ROOT =
-# BLUESKY_ROOT, ``instrument/plans/foo.py`` -> ``instrument.plans.foo``.
-IMPORT_ROOT = BLUESKY_ROOT
+    # The real MPE plan directory, scanned by the plan-runner's file browser.
+    PLANS_DIR = _abs(INSTRUMENT_DIR, "plans")
+
+    # Root the generated ``from <module> import <plan>`` line is resolved
+    # against (module = path of the plan file relative to this root).  With
+    # IMPORT_ROOT = BLUESKY_ROOT, ``instrument/plans/foo.py`` ->
+    # ``instrument.plans.foo``.
+    IMPORT_ROOT = BLUESKY_ROOT
 
 # Default working directory for a launched (embedded) kernel: the Bluesky
 # root, so the RunEngine's ``from instrument.collection import *`` resolves

@@ -313,17 +313,39 @@ class MainWindow(QtWidgets.QMainWindow):
         old_bluesky_root = config.get("bluesky_root")
         config.set_active_profile(name)
         self._apply_profile_change(f"Switched to profile '{name}'.")
-        if (
+        root_changed = config.get("bluesky_root") != old_bluesky_root
+        appearance_changed = (
             config.get("ui_scale") != old_scale
             or config.get("theme") != old_theme
             or config.get("font_family") != old_font
-            or config.get("bluesky_root") != old_bluesky_root
-        ):
+        )
+        if root_changed:
+            # paths.py resolves the Bluesky root (and, from it, the plan
+            # directory and import root) once at import time, so the panels
+            # are still pointed at the PREVIOUS profile's checkout until
+            # B-PILOT is restarted. Worth spelling out rather than filing
+            # under "appearance": until then the plan list reads the old
+            # tree with the new profile's file whitelist, which usually
+            # means it simply comes up empty -- a confusing state to hit
+            # without being told why. Switching between instruments of
+            # different layouts (mpe_bluesky vs. a BITS package such as
+            # 3-ID-C's id3c) always lands here.
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Restart required",
+                f"Profile '{name}' uses a different Bluesky root:\n"
+                f"{config.get('bluesky_root') or '(auto-detected)'}\n\n"
+                "That is resolved once at startup, so the plan list, import "
+                "lines and device catalog still refer to the previous "
+                "profile's checkout.\n\nRestart B-PILOT before running "
+                "anything from this profile.",
+            )
+        elif appearance_changed:
             QtWidgets.QMessageBox.information(
                 self,
                 "Restart required",
-                "Restart B-PILOT for the new profile's appearance and/or "
-                "Bluesky-root settings to take effect.",
+                "Restart B-PILOT for the new profile's appearance settings "
+                "to take effect.",
             )
 
     # ── Right panel: console + notes ────────────────────────────────────────────
