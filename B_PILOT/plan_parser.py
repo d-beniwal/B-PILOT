@@ -17,7 +17,10 @@ NumPy-style ``Parameters`` grammar so the GUI can build a form::
         <short name> :: <long description>
 
 * dtype in {str, int, float, bool, choice{a, b, ...}, positions, device{cat},
-  device_list{cat}, block{cat}}
+  device_list{cat}, block{cat}, code}
+* ``code`` is a raw Python expression, emitted unquoted -- for arguments that
+  are neither scalars nor catalog-enumerable (a dict such as ``md``, a list of
+  device objects). Validated as a parseable expression, never executed.
 * ``device{motor:whole}`` (category ``motor`` only): the plan wants the bare
   multi-axis device itself, never a resolved ``motor.axis`` -- for plans that
   index sub-axes internally (e.g. ``sms.y``). Omitting ``:whole`` is the
@@ -88,9 +91,17 @@ _NODEFAULT = object()  # sentinel: signature arg with no default (=> required)
 # scan_building_discovery.py) rather than device_source's device catalog, and
 # it takes a required ``{category}`` naming which of that catalog's lists
 # (plan_opener/per_step/plan_closer) to offer.
+# ``code`` = a free-text **Python expression**, emitted verbatim (RawCode) like
+# the device/block dtypes rather than through ``repr()``.  It is the escape
+# hatch for arguments whose value is neither a scalar nor something the
+# catalogs can enumerate -- a dict (``md``), a list of live device objects
+# (``flyscan``'s ``detectors``) -- which otherwise could not be offered in the
+# form at all, since a ``str`` field would quote them into the wrong type.
+# The field is validated as a parseable expression, so a typo is caught before
+# dispatch instead of at the kernel.
 _KNOWN_DTYPES = {
     "str", "int", "float", "bool", "choice", "positions", "device", "device_list",
-    "block",
+    "block", "code",
 }
 
 # ``instrument/plans/scan_skeletons.py``'s six generic scan plans all take their

@@ -12,6 +12,8 @@ holds per-panel state itself.
 """
 from __future__ import annotations
 
+import ast
+
 from PyQt5 import QtCore
 from PyQt5 import QtGui
 from PyQt5 import QtWidgets
@@ -124,6 +126,19 @@ def _make_field_widget(spec: ParamSpec, on_change):
         if spec.default not in (None, _NODEFAULT) and str(spec.default) in names:
             widget.setCurrentText(str(spec.default))
         widget.currentTextChanged.connect(on_change)
+    elif spec.dtype == "code":
+        # Raw Python expression, emitted unquoted (see plan_parser._KNOWN_DTYPES).
+        # Unlike every other dtype this prefills even a ``None`` default: for a
+        # code field ``None`` is itself meaningful, editable source text, and
+        # showing it is the difference between "the default is None" and "this
+        # field is blank". Clearing the box still omits the argument entirely
+        # when `blank_omits` (a None default), so the code default is reachable.
+        widget = QtWidgets.QLineEdit()
+        widget.setObjectName("mono")
+        if spec.default is not _NODEFAULT:
+            widget.setText(_code_default_text(spec.default))
+        widget.setPlaceholderText("Python expression, e.g. {'sample': 'A'}")
+        widget.textChanged.connect(on_change)
     else:  # str / int / float / unknown -> line edit
         widget = QtWidgets.QLineEdit()
         # Datatype enforcement: numeric fields reject non-numeric input.
@@ -270,11 +285,20 @@ def field_error(spec: ParamSpec, widget) -> str | None:
             return f"{short}: required"
         return None
 
-    # str / int / float / unknown -> line edit
+    # str / int / float / code / unknown -> line edit
     raw = widget.text().strip()
     if not raw:
         if spec.required and not spec.blank_omits:
             return f"{short}: required"
+        return None
+    if spec.dtype == "code":
+        # Parse-only: catches an unbalanced brace or a stray comma before the
+        # command is ever dispatched. Never evaluated -- a bare device name is
+        # a perfectly valid expression here and has no value in this process.
+        try:
+            ast.parse(raw, mode="eval")
+        except SyntaxError as exc:
+            return f"{short}: not a valid Python expression ({exc.msg})"
         return None
     if spec.dtype == "float":
         try:
@@ -287,6 +311,26 @@ def field_error(spec: ParamSpec, widget) -> str | None:
         except ValueError:
             return f"{short}: not a valid integer"
     return None
+
+
+def _code_default_text(default) -> str:
+    """Source text to prefill a ``code`` field with, for a signature default.
+
+    `plan_parser._literal` hands back a real Python value when the default is
+    a literal, and the *unparsed source text* when it is not (a module
+    constant, a call). Both need to render back to something that reads and
+    re-parses as the expression the author wrote -- so a string default that
+    came from `ast.unparse` must NOT be quoted again.
+    """
+    if isinstance(default, str):
+        # Already source text (e.g. "_CONSUMER_TICK_DEFAULT") unless it round
+        # trips as a literal string, in which case it needs its quotes back.
+        try:
+            ast.literal_eval(default)
+        except (ValueError, SyntaxError):
+            return default
+        return repr(default)
+    return repr(default)
 
 
 def _read_number(spec, widget, values, errors, short, caster, kind) -> None:
@@ -397,6 +441,16 @@ def parse_values(
             _read_number(spec, widget, values, errors, short, float, "number")
         elif spec.dtype == "int":
             _read_number(spec, widget, values, errors, short, int, "integer")
+        elif spec.dtype == "code":
+            # RawCode -> emitted verbatim, never repr()'d (it is an expression,
+            # not a string value).
+            raw = widget.text().strip()
+            if raw:
+                values[spec.name] = RawCode(raw)
+            elif spec.blank_omits:
+                pass
+            elif spec.required:
+                errors.append(f"{short}: required")
         else:  # str / unknown -> text
             raw = widget.text().strip()
             if raw:

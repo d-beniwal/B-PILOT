@@ -505,6 +505,14 @@ class PlanRunnerPanel(QtWidgets.QWidget):
                 widget.addItem(value_node.id)
                 idx = widget.count() - 1
             widget.setCurrentIndex(idx)
+        elif spec.dtype == "code":
+            # Restore the argument's SOURCE TEXT, not a literal value: a code
+            # field can hold an expression `literal_eval` cannot evaluate at
+            # all (`[scaler1, tc32E]` -- bare device names), which would
+            # otherwise be dropped and silently revert the field to its
+            # default. `unparse` also keeps a string value's quotes, which
+            # `str(literal_eval(...))` would strip.
+            widget.setText(ast.unparse(value_node))
         else:  # str / int / float / unknown -> line edit
             widget.setText(str(ast.literal_eval(value_node)))
 

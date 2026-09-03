@@ -127,6 +127,19 @@ def make_queue_item(
         val = values[spec.name]
         if isinstance(val, RawCode):
             text = str(val).strip()
+            if spec.dtype == "code":
+                # A `code` field holds an arbitrary expression. When it is a
+                # real literal (a dict for `md`, a number, a string) it has an
+                # exact wire value, so send that rather than its source text --
+                # QS needs `md` as a dict, not as "{'sample': 'A'}". Only when
+                # it is NOT a literal (`[scaler1, tc32E]` -- live object
+                # references) does it fall through to the name-string handling
+                # below, which is the same best-effort the device dtypes get.
+                try:
+                    kwargs[spec.name] = ast.literal_eval(text)
+                    continue
+                except (ValueError, SyntaxError):
+                    pass
             if text.startswith("[") and text.endswith("]"):
                 kwargs[spec.name] = [
                     n.strip() for n in text[1:-1].split(",") if n.strip()

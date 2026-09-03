@@ -47,7 +47,14 @@ _JSON_TYPE = {
     "int": "integer",
     "float": "number",
     "bool": "boolean",
+    # `code` is a raw Python expression the GUI emits unquoted; over a JSON
+    # tool schema it can only travel as its source text.
+    "code": "string",
 }
+# Any dtype with no richer handling above degrades to a string field rather
+# than raising: a KeyError here would take out the whole tool schema for one
+# unrecognized parameter (`positions` would already do this today).
+_JSON_TYPE_FALLBACK = "string"
 
 _MOTOR_AXIS_DESCRIPTION = (
     "Axis name for the chosen motor (e.g. 'x'), when it has more than one. "
@@ -121,7 +128,10 @@ def build_tool_schema(template: Template, catalog: DeviceCatalog, blocks: dict) 
         if spec.dtype == "choice":
             prop = {"type": "string", "enum": list(spec.choices or []), "description": spec.long}
         else:
-            prop = {"type": _JSON_TYPE[spec.dtype], "description": spec.long}
+            prop = {
+                "type": _JSON_TYPE.get(spec.dtype, _JSON_TYPE_FALLBACK),
+                "description": spec.long,
+            }
         if spec.units:
             prop["description"] += f" (units: {spec.units})"
         properties[spec.name] = prop
