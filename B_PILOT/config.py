@@ -93,6 +93,14 @@ DEFAULTS: dict = {
         "%load_ext autoreload\n"
         "%autoreload 2"
     ),
+    # Working directory the embedded kernel is started in (the toolbar's
+    # "Bluesky dir" field). Empty = the Bluesky root, which is what this
+    # always used to be. Worth setting per profile because a plan's
+    # CWD-relative outputs land here -- 3-ID-C's `flyscan` writes its master
+    # files next to the running console, and apsbits resolves iconfig.yml's
+    # relative MD_PATH (`.re_md_dict.yml`, which persists RE.md including
+    # scan_id) against it too. `~` is expanded when used.
+    "kernel_work_dir": "",
     # Console session persistence / reattach:
     "keep_kernel_on_exit": True,          # leave the kernel running when the GUI closes
     "last_kernel_connection_file": "",    # runtime state — path to reattach to
@@ -207,6 +215,7 @@ DEFAULTS: dict = {
 # of them into a profile would break portability to another workstation.
 _WORKSTATION_KEYS = {
     "bluesky_root",
+    "kernel_work_dir",
     "plans_dir",
     "import_root",
     "embedded_starter_script",

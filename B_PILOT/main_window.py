@@ -32,6 +32,26 @@ from .switchto_popup import SwitchToButton
 _DEFAULT_LAUNCH_DIR = paths.BLUESKY_ROOT
 
 
+def _launch_dir() -> str:
+    """Directory the embedded kernel is started in, for the active profile.
+
+    The profile's ``kernel_work_dir`` when set, else the Bluesky root (the
+    original, unconditional behavior). Expanded, so a stored ``~/...`` is a
+    real home-relative path rather than a literal ``~`` directory -- this is
+    the value that gets ``os.makedirs``'d at launch, so an unexpanded tilde
+    would silently create a folder named ``~`` under the GUI's own cwd.
+
+    It matters which directory this is: a plan's CWD-relative outputs land
+    here (3-ID-C's ``flyscan`` writes its master files beside the running
+    console), and apsbits resolves ``iconfig.yml``'s relative ``MD_PATH``
+    against it too -- so ``RE.md``, ``scan_id`` included, is per-directory.
+    """
+    configured = (config.get("kernel_work_dir") or "").strip()
+    if not configured:
+        return _DEFAULT_LAUNCH_DIR
+    return os.path.abspath(os.path.expanduser(configured))
+
+
 def _shutdown_btn_qss() -> str:
     """QSS for the toolbar Shutdown-kernel button: the normal button fill,
     but a bold red border marking it as a dangerous, hard-to-reverse action
@@ -210,10 +230,15 @@ class MainWindow(QtWidgets.QMainWindow):
         lay.addWidget(self._profile_combo)
 
         lay.addWidget(QtWidgets.QLabel("Bluesky dir:"))
-        self._workdir = QtWidgets.QLineEdit(_DEFAULT_LAUNCH_DIR)
+        self._workdir = QtWidgets.QLineEdit(_launch_dir())
         self._workdir.setMinimumWidth(S.px(160))
         self._workdir.setMaximumWidth(S.px(230))
-        self._workdir.setToolTip("Directory the Bluesky session runs in.")
+        self._workdir.setToolTip(
+            "Directory the Bluesky session runs in — where a plan's "
+            "CWD-relative output files land (and where the RunEngine's "
+            "metadata/scan_id file is kept).\nRemembered per profile; "
+            "blank resets it to the Bluesky root."
+        )
         lay.addWidget(self._workdir)
 
         browse_btn = QtWidgets.QToolButton()
@@ -293,6 +318,7 @@ class MainWindow(QtWidgets.QMainWindow):
         browser scope depends on the profile's configured plan files.
         """
         device_source.set_beamline(config.get("beamline"))
+        self._workdir.setText(_launch_dir())
         self.runner.apply_config()
         self._sync_autopilot_visibility()
         self._act_autopilot.blockSignals(True)
@@ -644,12 +670,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._launch_embedded()
 
     def _launch_embedded(self) -> None:
-        work_dir = self._workdir.text().strip() or _DEFAULT_LAUNCH_DIR
+        typed = self._workdir.text().strip()
+        # Expand before use: this path is about to be created, and an
+        # unexpanded "~/runs" would make a literal "~" directory.
+        work_dir = os.path.abspath(os.path.expanduser(typed)) if typed else _DEFAULT_LAUNCH_DIR
         try:
             os.makedirs(work_dir, exist_ok=True)
         except OSError as exc:
             self._set_toolbar_status(f"Cannot create {work_dir}: {exc}", error=True)
             return
+        # Remember it for next time (per profile). Store "" when it is just
+        # the Bluesky root, so an unchanged profile keeps no absolute path.
+        config.update({
+            "kernel_work_dir": "" if work_dir == _DEFAULT_LAUNCH_DIR else work_dir
+        })
+        self._workdir.setText(work_dir)
         self._launch_btn.setEnabled(False)
         self._attach_btn.setEnabled(False)
         self._set_toolbar_status("Starting IPython…", error=False)
