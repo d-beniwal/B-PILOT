@@ -5,7 +5,7 @@
     "user/s3idc_gui/flyscan_3idc.py",
     "user/s3idc_gui/sim_plans.py"
   ],
-  "bluesky_startup": "from id3c.startup import *\n%load_ext autoreload\n%autoreload 2",
+  "bluesky_startup": "import nest_asyncio; nest_asyncio.apply()\nfrom id3c.startup import *",
   "embedded_starter_script": "embedded_kernel_starter_3idc.sh",
   "keep_kernel_on_exit": true,
   "beamline": "3idc",
