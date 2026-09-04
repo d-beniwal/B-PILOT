@@ -94,6 +94,14 @@ DEFAULTS: dict = {
     # --IPKernelApp.exec_lines, so there is nothing left to send as a console
     # cell. Set it only to run EXTRA commands after the kernel comes up.
     "bluesky_startup": "",
+    # Whether the ``from <module> import <plan>`` line shown above every
+    # generated ``RE(plan(...))`` command is actually SENT to the console.
+    # Off by default: the profile's starter script already imports the
+    # instrument into the kernel namespace, so the line is redundant -- and
+    # because it shares one execution with the RE() call, a stale module
+    # path would take the plan down with it. The Command panel always shows
+    # the line regardless (see command_builder.for_console).
+    "send_import_line": False,
     # Working directory the embedded kernel is started in (the toolbar's
     # "Bluesky dir" field). Empty = the Bluesky root, which is what this
     # always used to be. Worth setting per profile because a plan's

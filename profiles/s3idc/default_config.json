@@ -6,6 +6,7 @@
     "user/s3idc_gui/sim_plans.py"
   ],
   "bluesky_startup": "",
+  "send_import_line": false,
   "embedded_starter_script": "starter_scripts/bits_3idc.sh",
   "keep_kernel_on_exit": true,
   "beamline": "3idc",

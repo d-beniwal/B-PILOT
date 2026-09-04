@@ -7,6 +7,10 @@ Extracted out of `PlanRunnerPanel` so both panels build commands the same
 way; `plan_name`/`module`/`params` are passed explicitly instead of being
 read off `self`.
 
+The import line is always part of the composed text (the Command panel shows
+it); :func:`for_console` decides whether it survives into what is actually
+sent to the kernel, per the profile's ``send_import_line`` setting.
+
 Also builds the structured item dict the Bluesky queueserver (QS)'s
 ``item_add`` expects (see :func:`make_queue_item`) -- kept dependency-free
 (no ``bluesky_queueserver_api`` import) since this module is used by the
@@ -15,13 +19,45 @@ interactive-Run path too, which has nothing to do with QS.
 from __future__ import annotations
 
 import ast
+import re
 
+from . import config
 from .plan_parser import ParamSpec
 from .plan_parser import RawCode
+
+# A top-level (column-0) import statement, as emitted by `make_import_line`.
+# Indented imports are deliberately NOT matched -- one inside a hand-edited
+# `try:`/function body is part of that block's logic, not a dispatch preamble.
+_IMPORT_LINE = re.compile(r"^(?:from\s+\S+\s+import\s|import\s)")
 
 
 def make_import_line(plan_name: str, module: str) -> str:
     return f"from {module} import {plan_name}"
+
+
+def strip_import_lines(text: str) -> str:
+    """`text` with its top-level ``import`` / ``from ... import ...`` lines removed."""
+    kept = [ln for ln in text.splitlines() if not _IMPORT_LINE.match(ln)]
+    return "\n".join(kept).strip()
+
+
+def for_console(text: str) -> str:
+    """The dispatch form of a composed command: what actually goes to the kernel.
+
+    The Command panel always *shows* the ``from ... import ...`` line, but
+    whether it is *sent* is per-profile (Configuration -> Launch Session ->
+    "Send the import line ..."; ``send_import_line``, off by default). Off is
+    safe because the profile's starter script already imports the instrument
+    into the kernel's namespace, and it keeps a stale/wrong module path from
+    killing the whole cell -- the import and the ``RE(...)`` call travel as
+    one execution, so a failed import means the plan never runs.
+
+    A command that is *only* import lines is passed through unchanged rather
+    than reduced to an empty cell.
+    """
+    if config.get("send_import_line"):
+        return text
+    return strip_import_lines(text) or text
 
 
 def make_re_line(

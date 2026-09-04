@@ -8,6 +8,7 @@ from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
 from . import autopilot_bridge
+from . import command_builder
 from . import config
 from . import det_startup_state
 from . import device_source
@@ -469,6 +470,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # run_code_sequence (waits for det_startup's result) rather than two
         # bare run_code() calls -- see its docstring for why firing both
         # immediately can silently drop `command` if det_startup errors.
+        # The panel's command text carries its `from ... import ...` line for
+        # display; whether that line is actually sent is per-profile -- see
+        # command_builder.for_console / config's `send_import_line`.
+        command = command_builder.for_console(command)
         self.console.run_code_sequence([startup, command] if startup else [command])
         # Only trigger the MIDAS_GUI live-view bridge for dispatches that
         # came from the plan-form panel itself, not the SwitchTo popup

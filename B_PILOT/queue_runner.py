@@ -29,6 +29,7 @@ try:
 except ImportError:
     fcntl = None
 
+from . import command_builder
 from . import config
 from . import det_startup_state
 from . import kernel_session as ks
@@ -139,7 +140,10 @@ def main(argv: list[str]) -> int:
                             qs.set_item_status(beamline, nxt["id"], qs.ERROR)
                             qs.set_state(beamline, qs.PAUSED)  # stop on error
                             continue
-                    ok = _run_cell(kc, nxt["command"], cf)
+                    # The stored command keeps its import line (the queue
+                    # panel displays it); whether it is sent is decided here,
+                    # at dispatch -- see command_builder.for_console.
+                    ok = _run_cell(kc, command_builder.for_console(nxt["command"]), cf)
                     if ok is None:
                         break  # kernel died mid-plan; leave item as-is and exit
                     qs.set_item_status(

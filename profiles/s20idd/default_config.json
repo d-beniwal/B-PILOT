@@ -6,6 +6,7 @@
     "scans_stationary.py"
   ],
   "bluesky_startup": "",
+  "send_import_line": false,
   "keep_kernel_on_exit": true,
   "beamline": "s20idd",
   "use_screen": true,

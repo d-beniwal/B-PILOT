@@ -479,6 +479,20 @@ class ConfigDialog(QtWidgets.QDialog):
         )
         card.body.addWidget(self._startup)
 
+        self._send_import = QtWidgets.QCheckBox(
+            "Send the 'from … import …' line along with the RE(…) command"
+        )
+        self._send_import.setToolTip(
+            "The Command panel always SHOWS the import line; this controls "
+            "whether it is also sent to the console.\n"
+            "Off (default): only the RE(...) call is sent — the starter script "
+            "has already imported the instrument into the kernel, so the line "
+            "is redundant, and a stale module path can't kill the run (import "
+            "and RE(...) share one execution).\n"
+            "On: both lines are sent, as before."
+        )
+        card.body.addWidget(self._send_import)
+
         self._keep_kernel = QtWidgets.QCheckBox(
             "Keep the IPython kernel running when the GUI closes "
             "(so it can be reattached)"
@@ -1251,6 +1265,7 @@ class ConfigDialog(QtWidgets.QDialog):
         self._rebuild_visibility_list()
 
         self._startup.setPlainText(cfg["bluesky_startup"])
+        self._send_import.setChecked(bool(cfg["send_import_line"]))
         self._keep_kernel.setChecked(bool(cfg["keep_kernel_on_exit"]))
         self._beamline.setText(cfg["beamline"])
         self._use_screen.setChecked(bool(cfg["use_screen"]))
@@ -1308,6 +1323,7 @@ class ConfigDialog(QtWidgets.QDialog):
                 if item.checkState(0) == QtCore.Qt.Checked
             ),
             "bluesky_startup": self._startup.toPlainText().strip(),
+            "send_import_line": self._send_import.isChecked(),
             "keep_kernel_on_exit": self._keep_kernel.isChecked(),
             "beamline": self._beamline.text().strip(),
             "use_screen": self._use_screen.isChecked(),

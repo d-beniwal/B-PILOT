@@ -222,7 +222,9 @@ class ContAcqPopup(QtWidgets.QFrame):
         # run_code_sequence (waits for det_startup's result) rather than two
         # bare run_code() calls -- see its docstring for why firing both
         # immediately can silently drop cont_acq if det_startup errors.
-        main_cmd = f"{import_line}\n{re_line}"
+        # for_console() drops the import line unless this profile's
+        # `send_import_line` is on -- see command_builder.for_console.
+        main_cmd = command_builder.for_console(f"{import_line}\n{re_line}")
         self._console.run_code_sequence([startup, main_cmd] if startup else [main_cmd])
         midas_bridge.notify_interactive(
             self._console, detectors, config.get("midas_bridge_enabled")
@@ -240,5 +242,5 @@ class ContAcqPopup(QtWidgets.QFrame):
         re_line = command_builder.make_re_line(
             "stop_cont_acq", spec["params"], {"det": RawCode(det_name)}
         )
-        self._console.run_code(f"{import_line}\n{re_line}")
+        self._console.run_code(command_builder.for_console(f"{import_line}\n{re_line}"))
         self.close()

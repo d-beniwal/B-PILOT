@@ -6,6 +6,7 @@
     "scans_stationary.py"
   ],
   "bluesky_startup": "",
+  "send_import_line": false,
   "keep_kernel_on_exit": true,
   "last_kernel_connection_file": "/Users/dbeniwal/.bluesky_pilot/20ide/kernel.json",
   "beamline": "20ide",
