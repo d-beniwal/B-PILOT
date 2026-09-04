@@ -187,7 +187,7 @@ class RunControlBar(QtWidgets.QWidget):
     def add_trailing_widget(self, widget: QtWidgets.QWidget) -> None:
         """Append `widget` to the far end of the top button row.
 
-        Used by the main window to place the BEAMMODE/TESTMODE toggle bar in
+        Used by the main window to place the BEAMMODE/SHUTTERMODE toggle bar in
         the same row as Stop run, rather than as its own row underneath.
         """
         self._row.addWidget(widget)

@@ -406,7 +406,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "RunEngine process from the embedded-kernel Console/Session log tabs.",
             )
         console_card.body.addWidget(self._console_tabs)
-        # BEAMMODE/TESTMODE toggles share run_controls' top row with Stop run
+        # BEAMMODE/SHUTTERMODE toggles share run_controls' top row with Stop run
         # / Shut down kernel, rather than sitting in a row of their own.
         self.run_controls.add_trailing_widget(self.mode_buttons)
         console_card.body.addWidget(self.run_controls)

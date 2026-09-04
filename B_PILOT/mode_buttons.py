@@ -1,8 +1,9 @@
-"""BEAMMODE / TESTMODE toggle buttons, shown in the run-controls button row.
+"""BEAMMODE / SHUTTERMODE toggle buttons, shown in the run-controls button row.
 
-``BEAMMODE`` and ``TESTMODE`` are in-memory ophyd ``Signal``s (see
+``BEAMMODE`` and ``SHUTTERMODE`` are in-memory ophyd ``Signal``s (see
 ``instrument/devices/global_variables.py``) that many plans branch on —
-e.g. whether to monitor for beam, or which suspenders to arm. Both buttons:
+e.g. whether to monitor for beam, or whether to drive the shutter. Both
+buttons:
 
 * poll ``NAME.get()`` **silently** (no console echo, no history entry) via
   :meth:`ConsolePanel.query_values`, colouring green/red/gray for
@@ -11,6 +12,14 @@ e.g. whether to monitor for beam, or which suspenders to arm. Both buttons:
 * toggle the value by running ``NAME.put(not current)`` **visibly** in the
   console on click, per spec — the toggle itself is a real, echoed command,
   only the background status poll is silent.
+
+``SHUTTERMODE`` replaced the former ``TESTMODE`` upstream (mpe_bluesky commit
+``c0c0494``, "changed TESTMODE to SHUTTERMODE and reversed logic") — and the
+sense is inverted, so the colour now means the opposite of what it used to.
+``SHUTTERMODE`` True (green) = plans **will** change shutter control; False
+(red) = they will not, which is the old ``TESTMODE`` True. Nothing here needs
+to translate between the two: B-PILOT only reads and writes whatever the
+kernel's signal holds.
 """
 from __future__ import annotations
 
@@ -31,11 +40,11 @@ def _mode_qss(bg: str) -> str:
     )
 
 
-_NAMES = ("BEAMMODE", "TESTMODE")
+_NAMES = ("BEAMMODE", "SHUTTERMODE")
 
 
 class ModeButtonBar(QtWidgets.QWidget):
-    """Two colour-coded toggle buttons for BEAMMODE / TESTMODE."""
+    """Two colour-coded toggle buttons for BEAMMODE / SHUTTERMODE."""
 
     def __init__(self, console, parent=None) -> None:
         """`console` is the ConsolePanel used for both the silent poll and the
@@ -91,7 +100,7 @@ class ModeButtonBar(QtWidgets.QWidget):
         self._console.query_values(
             {
                 "beammode": "bool(BEAMMODE.get())",
-                "testmode": "bool(TESTMODE.get())",
+                "shuttermode": "bool(SHUTTERMODE.get())",
             },
             self._on_status,
         )
@@ -99,7 +108,7 @@ class ModeButtonBar(QtWidgets.QWidget):
     def _on_status(self, result: dict) -> None:
         self._poll_inflight = False
         self._apply_state("BEAMMODE", result.get("beammode"))
-        self._apply_state("TESTMODE", result.get("testmode"))
+        self._apply_state("SHUTTERMODE", result.get("shuttermode"))
 
     def _apply_state(self, name: str, value) -> None:
         self._values[name] = value
