@@ -1,4 +1,7 @@
 {
+  "bluesky_root": "/home/beams12/S1IDUSER/bluesky",
+  "plans_dir": "/home/beams12/S1IDUSER/bluesky/instrument/plans",
+  "import_root": "/home/beams12/S1IDUSER/bluesky",
   "default_plan_file": "scans_stationary.py",
   "visible_plan_files": [
     "scan_skeletons.py",
