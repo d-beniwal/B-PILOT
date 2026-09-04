@@ -837,8 +837,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_toolbar_status("Reattached and ready.")
         else:
             # Fresh kernel only -- an attached one already went through this
-            # under its own original launch (autoreload state, if the
-            # profile's startup commands enable it, is part of that same
+            # under its own original launch (whatever state the profile's
+            # startup commands established is part of that same
             # already-established IPython session). Deferred to here (rather
             # than `_on_console_started`) because this is the first point the
             # console is actually confirmed ready to accept input -- see the

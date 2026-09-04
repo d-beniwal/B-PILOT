@@ -268,14 +268,15 @@ def launch(
     #    records the experiment (like blueskyStarter.sh) and starts an ipykernel
     #    in a screen session at `cf` — so the embedded kernel does the full
     #    beamline activation.  Fallback: launch a bare ipykernel directly.
-    #    A relative value is resolved against the GUI bundle dir (where the
-    #    starters ship), so a profile that needs a non-default starter -- e.g.
-    #    the BITS/3-ID-C profile's `embedded_kernel_starter_3idc.sh` -- can
-    #    name it portably instead of baking in one workstation's absolute
-    #    path. Absolute values are used as-is, exactly as before.
-    starter = config.get("embedded_starter_script")
-    if starter and not os.path.isabs(starter):
-        starter = os.path.join(_paths.BUNDLE_DIR, starter)
+    #    `_paths.resolve_starter` turns the configured value into an absolute
+    #    path: relative values resolve against the GUI bundle dir (where
+    #    `starter_scripts/` ships), so a profile that needs a non-default
+    #    starter -- e.g. the BITS/3-ID-C profile's
+    #    `starter_scripts/bits_3idc.sh` -- names it
+    #    portably instead of baking in one workstation's absolute path.
+    #    Absolute values are used as-is, and a stale pre-move path falls back
+    #    to the same basename under `starter_scripts/` (see that function).
+    starter = _paths.resolve_starter(config.get("embedded_starter_script"))
     try:
         if starter and os.path.exists(starter):
             hosted_in = "screen (starter)"

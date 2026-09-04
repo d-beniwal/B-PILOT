@@ -15,11 +15,12 @@ change without editing code:
   explicit whitelist of ``plans_dir``-relative paths that are even shown as
   rows in the file browser — edited via the Configuration dialog's Plan
   visibility card).
-* **Launch** — ``bluesky_startup``: the command(s) run automatically in the
+* **Launch** — ``bluesky_startup``: extra command(s) run automatically in the
   console right after *Launch IPython* connects (one per line, in order).
-  Defaults to loading Bluesky followed by IPython's autoreload extension —
-  edited per profile via the Configuration dialog's Launch Session tab
-  rather than hardcoded, so a beamline can reorder, drop, or add to them.
+  Empty by default — the instrument import itself is done by the profile's
+  starter script (``starter_scripts/*.sh``) as the kernel initializes, not
+  from here. Edited per profile via the Configuration dialog's Launch
+  Session tab.
 * **Devices** — ``device_search_paths`` (directories scanned by
   :mod:`device_discovery`) and ``device_selection`` (per-name shown/hidden).
 
@@ -88,11 +89,11 @@ DEFAULTS: dict = {
     # rows in the plan-runner's file browser. Explicit, not "empty = show all"
     # — Select-all/Deselect-all in the Configuration dialog cover both extremes.
     "visible_plan_files": [_P.DEFAULT_PLAN_FILE],
-    "bluesky_startup": (
-        "from instrument.collection import *\n"
-        "%load_ext autoreload\n"
-        "%autoreload 2"
-    ),
+    # Blank by default: each profile's starter script (starter_scripts/*.sh)
+    # performs the instrument import itself inside the kernel, via
+    # --IPKernelApp.exec_lines, so there is nothing left to send as a console
+    # cell. Set it only to run EXTRA commands after the kernel comes up.
+    "bluesky_startup": "",
     # Working directory the embedded kernel is started in (the toolbar's
     # "Bluesky dir" field). Empty = the Bluesky root, which is what this
     # always used to be. Worth setting per profile because a plan's

@@ -472,10 +472,10 @@ class ConfigDialog(QtWidgets.QDialog):
         self._startup.setObjectName("mono")
         self._startup.setFixedHeight(S.px(110))
         self._startup.setToolTip(
-            "Defaults to 'from instrument.collection import *' (account-"
-            "gated; queueserver uses 'from instrument.queueserver import *') "
-            "followed by the autoreload magics -- edit or reorder freely, "
-            "each line runs as its own command in order."
+            "Normally EMPTY: the instrument import is done by this profile's "
+            "starter script (starter_scripts/*.sh) as the kernel starts, not "
+            "from here. Use this only for EXTRA commands to run once the "
+            "console connects -- each line runs as its own command, in order."
         )
         card.body.addWidget(self._startup)
 

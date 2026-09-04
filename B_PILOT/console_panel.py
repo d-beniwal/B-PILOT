@@ -18,10 +18,12 @@ same running kernel — including one with a plan still running in it.
 The kernel is NOT started until :meth:`start` (or :meth:`attach`) is called.
 On a fresh :meth:`start`, the configured startup command(s) (see
 :meth:`run_startup_commands`) run automatically once the kernel connects —
-this DOES touch hardware/EPICS if configured to (the default includes
-``from instrument.collection import *``).  :meth:`attach` never runs them: a
-reattached kernel already went through this once, under its own original
-launch.
+this DOES touch hardware/EPICS if configured to.  Since 2026-09-03 the shipped
+profiles configure none: the instrument import moved into the starter scripts
+(``starter_scripts/*.sh``, ``--IPKernelApp.exec_lines``), so it happens as the
+kernel initializes rather than as a console cell.  :meth:`attach` never runs
+them either way: a reattached kernel already went through this once, under its
+own original launch.
 """
 from __future__ import annotations
 
@@ -104,10 +106,15 @@ def _rescan_output_bands(control) -> None:
         pass
 
 # Fallback startup command(s) if config is unavailable -- mirrors
-# config.DEFAULTS["bluesky_startup"]. Running the collection import CONNECTS
-# TO HARDWARE/EPICS, so this is only ever triggered by an explicit user
-# action (a fresh Launch IPython), never on attach.
-BLUESKY_STARTUP = "from instrument.collection import *\n%load_ext autoreload\n%autoreload 2"
+# config.DEFAULTS["bluesky_startup"], which is now EMPTY: since 2026-09-03 the
+# instrument import lives in the profile's starter script (starter_scripts/*.sh,
+# via --IPKernelApp.exec_lines) instead of being sent as a console cell, so
+# there is nothing left to run by default. Kept as a named constant, not
+# inlined, so a deployment that still wants a console-side startup command has
+# one obvious place to look. Anything put here CONNECTS TO HARDWARE/EPICS when
+# it is an instrument import, and only ever on an explicit fresh Launch
+# IPython, never on attach.
+BLUESKY_STARTUP = ""
 
 _PLACEHOLDER = (
     "IPython session not started.\n\n"
@@ -521,8 +528,8 @@ class ConsolePanel(QtWidgets.QWidget):
         sequence -- the right call for det_startup-then-real-plan, where the
         plan must never run if its prerequisite failed. False keeps going
         regardless -- the right call for independent startup commands (e.g.
-        the collection import failing shouldn't also skip the autoreload
-        magics), see :meth:`run_startup_commands`.
+        on the BITS profile, a missing `nest_asyncio` shouldn't also skip the
+        collection import), see :meth:`run_startup_commands`.
 
         Two things this avoids:
 
@@ -684,18 +691,28 @@ class ConsolePanel(QtWidgets.QWidget):
         Launch Session), falling back to :data:`BLUESKY_STARTUP` if unset
         (CONNECTS TO HARDWARE if configured to).  Called automatically once
         the kernel handshake completes on a fresh :meth:`start` (see
-        ``MainWindow._on_console_ready``) — never after :meth:`attach`.  Uses
-        :meth:`run_code_sequence` with ``stop_on_error=False``: these are
-        independent commands (e.g. the collection import failing shouldn't
-        also skip the autoreload magics), unlike the det_startup-then-plan
-        chain that method's default is built around, so one line's failure
-        must never swallow the rest — see that method's docstring for why
-        firing them back-to-back without waiting at all is unsafe regardless.
+        ``MainWindow._on_console_ready``) — never after :meth:`attach`.
+
+        **Normally a no-op since 2026-09-03**: every shipped profile now leaves
+        ``bluesky_startup`` blank because its starter script performs the
+        instrument import itself, inside the kernel, via
+        ``--IPKernelApp.exec_lines``. Blank means *run nothing* — it must not
+        fall through to some other instrument's import, which is what a
+        non-empty default would do to a BITS kernel.
+
+        Any commands that *are* configured go through
+        :meth:`run_code_sequence` with ``stop_on_error=False``: they are
+        independent of each other, unlike the det_startup-then-plan chain that
+        method's default is built around, so one line's failure must never
+        swallow the rest — see that method's docstring for why firing them
+        back-to-back without waiting at all is unsafe regardless.
         """
         cmd = config.get("bluesky_startup")
         if not cmd or not cmd.strip():
             cmd = BLUESKY_STARTUP
         lines = [line.strip() for line in cmd.splitlines() if line.strip()]
+        if not lines:
+            return
         self.run_code_sequence(lines, stop_on_error=False)
 
     def detach(self) -> None:

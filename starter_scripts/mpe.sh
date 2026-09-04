@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# embedded_kernel_starter.sh
+# starter_scripts/mpe.sh
 # ---------------------------------------------------------------------------
 # Equivalent to blueskyStarter.sh, but for the GUI's EMBEDDED kernel launch:
 # it does the same environment activation and experiment recording, then starts
@@ -15,7 +15,7 @@
 # version, the GUI's "Load Bluesky" button remains as a fallback.)
 #
 # Usage:
-#   embedded_kernel_starter.sh <dm_experiment> <setup_file> <connection_file> <screen_session>
+#   mpe.sh <dm_experiment> <setup_file> <connection_file> <screen_session>
 #
 # Lives in the GUI bundle dir (<mpe_bluesky>/gui/); see .context/DECISIONS.md.
 # ---------------------------------------------------------------------------
@@ -130,13 +130,38 @@ fi
 pick_environment_executable
 
 # ── start the KERNEL (not a REPL) in a detached screen session ──────────────
-# The GUI attaches to CONNECTION_FILE; --profile=bluesky runs the profile
-# startup (collection import).  screen -dmS inherits the activated env above.
+# The GUI attaches to CONNECTION_FILE.  screen -dmS inherits the activated env.
 if [ -z "${CONNECTION_FILE}" ] || [ -z "${SCREEN_NAME}" ]; then
     echo "ERROR: connection file and screen session name are required."
     exit 2
 fi
 
+# ── startup commands run inside the kernel (--IPKernelApp.exec_lines) ───────
+# The collection import is done HERE rather than through B-PILOT's
+# `bluesky_startup` profile setting (now blank for the MPE profiles). It runs
+# in the kernel's IPython USER namespace at init, so every name it binds is
+# visible to later console cells -- `python -c "from x import *"` ahead of the
+# launcher does NOT work for this, IPython builds a fresh `__main__` for the
+# shell and discards the launcher's namespace (verified).
+#
+# --profile=bluesky is still passed and its startup files still run; this line
+# makes the import explicit and deterministic rather than depending on whether
+# the profile startup auto-runs under ipykernel (a long-standing open question,
+# see .context/STATE.md). Importing twice is harmless -- sys.modules caches the
+# module, so the second import only rebinds names and re-connects nothing.
+#
+# ⚠ TRADE-OFF, deliberate: exec_lines run before any client can connect, so
+# their output is published to iopub with nobody subscribed and is DISCARDED --
+# it reaches neither B-PILOT's console nor this screen session. A failing
+# import leaves the kernel up and apparently healthy. If Bluesky names are
+# missing, re-run the import by hand in the B-PILOT console to see the real
+# traceback.
+# Verified against ipykernel 7.3.0.
+#
+# CONNECTS TO HARDWARE / EPICS -- this is the collection import.
+EXEC_LINES='["from instrument.collection import *"]'
+
 echo "==> starting ipykernel in screen '${SCREEN_NAME}' at ${CONNECTION_FILE}"
+echo "==> kernel startup lines: ${EXEC_LINES}"
 screen -dmS "${SCREEN_NAME}" bash -c \
-    "python -X frozen_modules=off -m ipykernel_launcher -f '${CONNECTION_FILE}' --profile=${IPYTHON_PROFILE} --ipython-dir=${IPYTHONDIR}"
+    "python -X frozen_modules=off -m ipykernel_launcher -f '${CONNECTION_FILE}' --profile=${IPYTHON_PROFILE} --ipython-dir=${IPYTHONDIR} --IPKernelApp.exec_lines='${EXEC_LINES}'"

@@ -146,7 +146,8 @@ one that started the kernel, and you don't need `screen -r` for it. The
 connection file carries everything a client needs to connect (ports, IP,
 HMAC key, signature scheme). You may notice its `kernel_name` field is blank
 — that's expected: B-PILOT starts the kernel directly via
-`ipykernel_launcher` (`embedded_kernel_starter.sh`), bypassing the Jupyter
+`ipykernel_launcher` (`starter_scripts/mpe.sh`),
+bypassing the Jupyter
 kernelspec lookup that normally fills that field in, and it has no effect on
 connecting.
 

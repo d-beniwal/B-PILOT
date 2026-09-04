@@ -61,11 +61,56 @@ BUNDLE_DIR = os.path.dirname(GUI_DIR)                   # parent of B_PILOT (e.g
 CONFIG_PATH = _abs(BUNDLE_DIR, "gui_config.json")  # tiny pointer: {"active_profile": name}
 PROFILES_DIR = _abs(BUNDLE_DIR, "profiles")         # one JSON file per beamline profile
 TEST_PLANS_DIR = _abs(BUNDLE_DIR, "test_plans")  # unused by default; kept for back-compat
-EMBEDDED_STARTER = _abs(BUNDLE_DIR, "embedded_kernel_starter.sh")
+# Kernel starter scripts, one per *project layout* (not per beamline): the
+# three MPE profiles share `mpe.sh`, the BITS/3-ID-C profile uses
+# `bits_3idc.sh`. They live in one folder so
+# adding an instrument means dropping a script in here and naming it in that
+# profile's `embedded_starter_script` -- see resolve_starter() below.
+STARTERS_DIR = _abs(BUNDLE_DIR, "starter_scripts")
+EMBEDDED_STARTER = _abs(STARTERS_DIR, "mpe.sh")
 
 # Directory to put on sys.path so ``import B_PILOT`` works when a module is run as
 # a plain script (``python B_PILOT/app.py``) rather than ``python -m B_PILOT``.
 PKG_PARENT = BUNDLE_DIR
+
+
+# Pre-2026-09-03 starter filenames, kept resolvable for workstations whose
+# gitignored active_config.json still names one (a pull never rewrites it).
+_STARTER_ALIASES = {
+    "embedded_kernel_starter.sh": "mpe.sh",
+    "embedded_kernel_starter_3idc.sh": "bits_3idc.sh",
+}
+
+
+def resolve_starter(value: str | None) -> str:
+    """Resolve a profile's ``embedded_starter_script`` to an absolute path.
+
+    Tried in order, first hit wins:
+
+    1. The value as given (absolute, or relative to :data:`BUNDLE_DIR`) —
+       so ``"starter_scripts/bits_3idc.sh"`` works, and an
+       absolute path keeps behaving exactly as it always has.
+    2. Its basename inside :data:`STARTERS_DIR`, mapping the pre-rename
+       filenames through :data:`_STARTER_ALIASES`.
+
+    Step 2 exists purely for **already-deployed workstations**: their
+    ``active_config.json`` is gitignored per-workstation state that a pull
+    never rewrites (see DECISIONS.md's 2026-09-03 5th entry), so a config
+    written before the scripts moved still names the old bundle-root
+    location. Rather than silently falling back to a bare ipykernel — which
+    starts fine and then fails much later with no devices — we find the
+    script under its new home. Returns "" for an unset value, and returns
+    the step-1 candidate unchanged when nothing exists, so the caller's own
+    ``os.path.exists`` check still decides.
+    """
+    if not value:
+        return ""
+    candidate = value if os.path.isabs(value) else _abs(BUNDLE_DIR, value)
+    if os.path.exists(candidate):
+        return candidate
+    base = os.path.basename(value)
+    moved = _abs(STARTERS_DIR, _STARTER_ALIASES.get(base, base))
+    return moved if os.path.exists(moved) else candidate
 
 
 # ── Bluesky root (an explicit profile override, else found by walking up) ───
