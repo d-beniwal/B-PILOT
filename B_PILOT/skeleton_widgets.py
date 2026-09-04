@@ -463,6 +463,7 @@ class MotorRowsWidget(QtWidgets.QWidget):
         self._rows.remove(row)
         for widget in row.field_widgets() + [row.remove_btn]:
             self._grid.removeWidget(widget)
+            widget.deleteLater()  # these are unparented from `row` -- see class docstring
         row.deleteLater()
         for remaining in self._rows:  # re-place so grid rows stay contiguous
             self._place_row(remaining)
